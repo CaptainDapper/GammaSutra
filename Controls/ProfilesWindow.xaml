@@ -1,0 +1,54 @@
+<Window x:Class="GammaControl.Controls.ProfilesWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Profiles" Width="460" SizeToContent="Height"
+        ResizeMode="NoResize" WindowStartupLocation="CenterOwner">
+    <StackPanel Margin="12">
+
+        <!-- Create new profile from current state -->
+        <Grid Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="NewProfileNameBox" Grid.Column="0"
+                     Padding="4,3" Margin="0,0,6,0" VerticalContentAlignment="Center"
+                     KeyDown="NewProfileNameBox_KeyDown"/>
+            <Button Grid.Column="1" Content="Create" Padding="8,4"
+                    Click="CreateProfileButton_Click"/>
+        </Grid>
+
+        <Separator Margin="0,0,0,6"/>
+
+        <!-- Profile list (rows generated in code) -->
+        <ScrollViewer MaxHeight="300" VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="ProfilesStack"/>
+        </ScrollViewer>
+
+        <!-- Hotkey capture panel — hidden until Hotkey is clicked -->
+        <StackPanel x:Name="CapturePanel" Visibility="Collapsed" Margin="0,8,0,0">
+            <Separator Margin="0,0,0,8"/>
+            <TextBlock x:Name="CaptureTargetLabel" Margin="0,0,0,6"
+                       Foreground="#AAAAAA" FontStyle="Italic"/>
+            <Border BorderBrush="#555555" BorderThickness="1">
+                <TextBox x:Name="CaptureBox"
+                         Text="Click here, then press your key combination..."
+                         IsReadOnly="True" Padding="6,8"
+                         BorderThickness="0" Background="#1E1E1E" Foreground="#EEEEEE"
+                         FontSize="13"
+                         PreviewKeyDown="CaptureBox_PreviewKeyDown"
+                         GotFocus="CaptureBox_GotFocus"/>
+            </Border>
+            <StackPanel Orientation="Horizontal" Margin="0,6,0,0" HorizontalAlignment="Right">
+                <Button x:Name="CaptureConfirmButton" Content="Confirm"
+                        Padding="8,4" Margin="0,0,4,0" IsEnabled="False"
+                        Click="CaptureConfirm_Click"/>
+                <Button Content="Clear" Padding="8,4" Margin="0,0,4,0"
+                        Click="CaptureClear_Click"/>
+                <Button Content="Cancel" Padding="8,4"
+                        Click="CaptureCancel_Click"/>
+            </StackPanel>
+        </StackPanel>
+
+    </StackPanel>
+</Window>
