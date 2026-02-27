@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Forms;
 using System.Windows.Interop;
 using GammaControl.Controls;
@@ -11,11 +12,13 @@ public partial class MainWindow : Window
 {
     private HotkeyManager? _hotkeyManager;
     private readonly Dictionary<string, MonitorSettings> _monitorSettings = new();
-    private readonly Dictionary<string, MonitorSettings> _loadedMonitorSettings = new();
-    private string _currentProfileName = string.Empty;
+    private readonly Dictionary<string, MonitorSettings> _loadedSettings = new();
+    private readonly Dictionary<string, string> _monitorProfileNames = new();
     private bool _suppressEvents = false;
     private bool _isDrawMode = false;
+    private bool _isBezierMode = false;
     private bool _isInitialized = false;
+    private int _activeChannel = -1; // -1 = All, 0 = R, 1 = G, 2 = B
 
     internal ProfileService ProfileService { get; } = new();
 
@@ -64,37 +67,96 @@ public partial class MainWindow : Window
     private MonitorSettings? CurrentSettings =>
         SelectedDevice is { } dev && _monitorSettings.TryGetValue(dev, out var s) ? s : null;
 
+    private string CurrentProfileName
+    {
+        get => SelectedDevice is { } dev && _monitorProfileNames.TryGetValue(dev, out var n) ? n : string.Empty;
+        set { if (SelectedDevice is { } dev) _monitorProfileNames[dev] = value; }
+    }
+
     private void MonitorComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        => LoadUIFromCurrentSettings();
+    {
+        LoadUIFromCurrentSettings();
+        UpdateCurrentProfileLabel();
+        ClearDirty();
+    }
+
+    // Helper: which channel index to read from for UI display
+    // In "All" mode, read from channel 0 (all 3 are kept in sync)
+    private int ReadChannel => _activeChannel < 0 ? 0 : _activeChannel;
 
     private void LoadUIFromCurrentSettings()
     {
         var s = CurrentSettings;
         if (s == null) return;
 
+        int ch = ReadChannel;
         _suppressEvents = true;
-        GammaSlider.Value      = s.Gamma;
-        BrightnessSlider.Value = s.Brightness;
-        ContrastSlider.Value   = s.Contrast;
-        SCurveSlider.Value     = s.SCurve;
-        HighlightsSlider.Value = s.Highlights;
-        ShadowsSlider.Value    = s.Shadows;
-        GammaLabel.Text        = s.Gamma.ToString("F2");
-        BrightnessLabel.Text   = s.Brightness.ToString("F2");
-        ContrastLabel.Text     = s.Contrast.ToString("F2");
-        SCurveLabel.Text       = s.SCurve.ToString("F2");
-        HighlightsLabel.Text   = s.Highlights.ToString("F2");
-        ShadowsLabel.Text      = s.Shadows.ToString("F2");
+        GammaSlider.Value      = s.Gamma[ch];
+        BrightnessSlider.Value = s.Brightness[ch];
+        ContrastSlider.Value   = s.Contrast[ch];
+        SCurveSlider.Value     = s.SCurve[ch];
+        HighlightsSlider.Value = s.Highlights[ch];
+        ShadowsSlider.Value    = s.Shadows[ch];
+        GammaLabel.Text        = s.Gamma[ch].ToString("F2");
+        BrightnessLabel.Text   = s.Brightness[ch].ToString("F2");
+        ContrastLabel.Text     = s.Contrast[ch].ToString("F2");
+        SCurveLabel.Text       = s.SCurve[ch].ToString("F2");
+        HighlightsLabel.Text   = s.Highlights[ch].ToString("F2");
+        ShadowsLabel.Text      = s.Shadows[ch].ToString("F2");
+
+        // Posterize
+        PosterizeStepsSlider.Value    = s.PosterizeSteps[ch];
+        PosterizeRangeMinSlider.Value = s.PosterizeRangeMin[ch];
+        PosterizeRangeMaxSlider.Value = s.PosterizeRangeMax[ch];
+        PosterizeFeatherSlider.Value  = s.PosterizeFeather[ch];
+        PosterizeStepsLabel.Text      = s.PosterizeSteps[ch].ToString();
+        PosterizeRangeMinLabel.Text   = s.PosterizeRangeMin[ch].ToString("F2");
+        PosterizeRangeMaxLabel.Text   = s.PosterizeRangeMax[ch].ToString("F2");
+        PosterizeFeatherLabel.Text    = s.PosterizeFeather[ch].ToString("F2");
         _suppressEvents = false;
 
         RefreshCurve();
     }
 
+    // ── Channel selector ──────────────────────────────────────────────────────
+
+    private void ChannelButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender == ChannelAllButton) _activeChannel = -1;
+        else if (sender == ChannelRButton) _activeChannel = 0;
+        else if (sender == ChannelGButton) _activeChannel = 1;
+        else if (sender == ChannelBButton) _activeChannel = 2;
+
+        ChannelAllButton.IsChecked = _activeChannel == -1;
+        ChannelRButton.IsChecked   = _activeChannel == 0;
+        ChannelGButton.IsChecked   = _activeChannel == 1;
+        ChannelBButton.IsChecked   = _activeChannel == 2;
+
+        CurveControl.ActiveChannel = _activeChannel;
+        LoadUIFromCurrentSettings();
+    }
+
     // ── Sliders ─────────────────────────────────────────────────────────────
+
+    private void WriteToChannels(double[] arr, double value)
+    {
+        if (_activeChannel < 0)
+            arr[0] = arr[1] = arr[2] = value;
+        else
+            arr[_activeChannel] = value;
+    }
+
+    private void WriteToChannels(int[] arr, int value)
+    {
+        if (_activeChannel < 0)
+            arr[0] = arr[1] = arr[2] = value;
+        else
+            arr[_activeChannel] = value;
+    }
 
     private void Slider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (!_isInitialized || _suppressEvents || _isDrawMode) return;
+        if (!_isInitialized || _suppressEvents || _isDrawMode || _isBezierMode) return;
 
         GammaLabel.Text      = GammaSlider.Value.ToString("F2");
         BrightnessLabel.Text = BrightnessSlider.Value.ToString("F2");
@@ -106,13 +168,41 @@ public partial class MainWindow : Window
         var s = CurrentSettings;
         if (s != null)
         {
-            s.Gamma      = GammaSlider.Value;
-            s.Brightness = BrightnessSlider.Value;
-            s.Contrast   = ContrastSlider.Value;
-            s.SCurve     = SCurveSlider.Value;
-            s.Highlights = HighlightsSlider.Value;
-            s.Shadows    = ShadowsSlider.Value;
-            s.UseDrawnCurve = false;
+            WriteToChannels(s.Gamma, GammaSlider.Value);
+            WriteToChannels(s.Brightness, BrightnessSlider.Value);
+            WriteToChannels(s.Contrast, ContrastSlider.Value);
+            WriteToChannels(s.SCurve, SCurveSlider.Value);
+            WriteToChannels(s.Highlights, HighlightsSlider.Value);
+            WriteToChannels(s.Shadows, ShadowsSlider.Value);
+            if (_activeChannel < 0)
+                s.UseDrawnCurve[0] = s.UseDrawnCurve[1] = s.UseDrawnCurve[2] = false;
+            else
+                s.UseDrawnCurve[_activeChannel] = false;
+        }
+
+        ApplyCurrentToMonitor();
+        RefreshCurve();
+        MarkDirty();
+    }
+
+    // ── Posterize sliders ─────────────────────────────────────────────────────
+
+    private void PosterizeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!_isInitialized || _suppressEvents) return;
+
+        PosterizeStepsLabel.Text    = ((int)PosterizeStepsSlider.Value).ToString();
+        PosterizeRangeMinLabel.Text = PosterizeRangeMinSlider.Value.ToString("F2");
+        PosterizeRangeMaxLabel.Text = PosterizeRangeMaxSlider.Value.ToString("F2");
+        PosterizeFeatherLabel.Text  = PosterizeFeatherSlider.Value.ToString("F2");
+
+        var s = CurrentSettings;
+        if (s != null)
+        {
+            WriteToChannels(s.PosterizeSteps, (int)PosterizeStepsSlider.Value);
+            WriteToChannels(s.PosterizeRangeMin, PosterizeRangeMinSlider.Value);
+            WriteToChannels(s.PosterizeRangeMax, PosterizeRangeMaxSlider.Value);
+            WriteToChannels(s.PosterizeFeather, PosterizeFeatherSlider.Value);
         }
 
         ApplyCurrentToMonitor();
@@ -124,35 +214,122 @@ public partial class MainWindow : Window
 
     private void DrawModeButton_Checked(object sender, RoutedEventArgs e)
     {
+        if (_isBezierMode)
+        {
+            _isBezierMode = false;
+            BezierModeButton.IsChecked = false;
+            CurveControl.SetBezierMode(false);
+        }
+
         _isDrawMode = true;
         SetSlidersEnabled(false);
 
         var s = CurrentSettings;
-        if (s != null && !s.UseDrawnCurve)
+        if (s != null)
         {
-            s.DrawnRamp = GammaCalculator.BuildRamp(
-                s.Gamma, s.Brightness, s.Contrast, s.SCurve, s.Highlights, s.Shadows);
-            s.UseDrawnCurve = true;
+            s.CurveMode = 1;
+            // Initialize drawn ramps for channels that don't have one yet
+            for (int ch = 0; ch < 3; ch++)
+            {
+                if (!s.UseDrawnCurve[ch])
+                {
+                    s.DrawnRamp[ch] = GammaCalculator.BuildRamp(
+                        s.Gamma[ch], s.Brightness[ch], s.Contrast[ch],
+                        s.SCurve[ch], s.Highlights[ch], s.Shadows[ch]);
+                    s.UseDrawnCurve[ch] = true;
+                }
+            }
         }
 
-        if (s?.DrawnRamp != null)
-            CurveControl.UpdateRamp(s.DrawnRamp);
-
+        CurveControl.UpdateRamps(
+            s?.DrawnRamp[0] ?? new ushort[256],
+            s?.DrawnRamp[1] ?? new ushort[256],
+            s?.DrawnRamp[2] ?? new ushort[256],
+            _activeChannel);
         CurveControl.SetDrawMode(true);
     }
 
     private void DrawModeButton_Unchecked(object sender, RoutedEventArgs e)
     {
         _isDrawMode = false;
-        SetSlidersEnabled(true);
+        if (!_isBezierMode)
+            SetSlidersEnabled(true);
+
+        var s = CurrentSettings;
+        if (s != null && !_isBezierMode)
+        {
+            s.CurveMode = 0;
+            s.UseDrawnCurve[0] = s.UseDrawnCurve[1] = s.UseDrawnCurve[2] = false;
+        }
+
+        CurveControl.SetDrawMode(false);
+        if (!_isBezierMode)
+        {
+            RefreshCurve();
+            ApplyCurrentToMonitor();
+        }
+    }
+
+    // ── Bezier mode ───────────────────────────────────────────────────────────
+
+    private void BezierModeButton_Checked(object sender, RoutedEventArgs e)
+    {
+        if (_isDrawMode)
+        {
+            _isDrawMode = false;
+            DrawModeButton.IsChecked = false;
+            CurveControl.SetDrawMode(false);
+        }
+
+        _isBezierMode = true;
+        SetSlidersEnabled(false);
 
         var s = CurrentSettings;
         if (s != null)
-            s.UseDrawnCurve = false;
+        {
+            s.CurveMode = 2;
+            CurveControl.SetBezierMode(true, s.BezierPoints);
 
-        CurveControl.SetDrawMode(false);
-        RefreshCurve();
-        ApplyCurrentToMonitor();
+            for (int ch = 0; ch < 3; ch++)
+            {
+                s.DrawnRamp[ch] = BezierEvaluator.Evaluate(
+                    s.BezierPoints[ch] ?? BezierEvaluator.DefaultPoints());
+                s.UseDrawnCurve[ch] = true;
+                s.BezierPoints[ch] ??= CurveControl.GetBezierPoints(ch);
+            }
+            ApplyCurrentToMonitor();
+        }
+        else
+        {
+            CurveControl.SetBezierMode(true);
+        }
+    }
+
+    private void BezierModeButton_Unchecked(object sender, RoutedEventArgs e)
+    {
+        _isBezierMode = false;
+        CurveControl.SetBezierMode(false);
+
+        if (!_isDrawMode)
+        {
+            SetSlidersEnabled(true);
+            var s = CurrentSettings;
+            if (s != null)
+            {
+                s.CurveMode = 0;
+                s.UseDrawnCurve[0] = s.UseDrawnCurve[1] = s.UseDrawnCurve[2] = false;
+            }
+            RefreshCurve();
+            ApplyCurrentToMonitor();
+        }
+    }
+
+    private void CurveControl_BezierPointsChanged(object sender, BezierPointsChangedEventArgs args)
+    {
+        var s = CurrentSettings;
+        if (s == null) return;
+        s.BezierPoints[args.Channel] = args.Points;
+        MarkDirty();
     }
 
     private void SetSlidersEnabled(bool enabled)
@@ -165,24 +342,43 @@ public partial class MainWindow : Window
         ShadowsSlider.IsEnabled    = enabled;
     }
 
-    private void CurveControl_DrawnRampChanged(object sender, ushort[] ramp)
+    private void CurveControl_DrawnRampChanged(object sender, DrawnRampChangedEventArgs args)
     {
         var s = CurrentSettings;
         if (s == null) return;
-        s.DrawnRamp = ramp;
-        s.UseDrawnCurve = true;
+        s.DrawnRamp[args.Channel] = args.Ramp;
+        s.UseDrawnCurve[args.Channel] = true;
         ApplyCurrentToMonitor();
         MarkDirty();
     }
 
     // ── Apply / Reset ────────────────────────────────────────────────────────
 
+    private ushort[] BuildChannelRamp(MonitorSettings s, int ch)
+    {
+        ushort[] channel;
+        if (s.UseDrawnCurve[ch] && s.DrawnRamp[ch] != null)
+            channel = (ushort[])s.DrawnRamp[ch]!.Clone();
+        else
+            channel = GammaCalculator.BuildRamp(s.Gamma[ch], s.Brightness[ch], s.Contrast[ch],
+                                                s.SCurve[ch], s.Highlights[ch], s.Shadows[ch]);
+
+        if (s.PosterizeSteps[ch] >= 2)
+            channel = GammaCalculator.ApplyPosterize(channel, s.PosterizeSteps[ch],
+                s.PosterizeRangeMin[ch], s.PosterizeRangeMax[ch],
+                s.PosterizeFeather[ch], s.PosterizeFeatherCurve[ch]);
+
+        return channel;
+    }
+
     private NativeMethods.RAMP BuildRampForSettings(MonitorSettings s)
     {
-        return s.UseDrawnCurve && s.DrawnRamp != null
-            ? GammaCalculator.BuildFullRampFromArray(s.DrawnRamp)
-            : GammaCalculator.BuildFullRamp(s.Gamma, s.Brightness, s.Contrast,
-                                            s.SCurve, s.Highlights, s.Shadows);
+        return new NativeMethods.RAMP
+        {
+            Red   = BuildChannelRamp(s, 0),
+            Green = BuildChannelRamp(s, 1),
+            Blue  = BuildChannelRamp(s, 2),
+        };
     }
 
     private void ApplyCurrentToMonitor()
@@ -192,26 +388,40 @@ public partial class MainWindow : Window
         MonitorService.ApplyRamp(SelectedDevice, BuildRampForSettings(s));
     }
 
-    private void ApplyAllButton_Click(object sender, RoutedEventArgs e)
-    {
-        var s = CurrentSettings;
-        if (s == null) return;
-        var ramp = BuildRampForSettings(s);
-        foreach (var screen in Screen.AllScreens)
-            MonitorService.ApplyRamp(screen.DeviceName, ramp);
-    }
-
     private void ResetButton_Click(object sender, RoutedEventArgs e)
     {
         MonitorService.ResetAll();
 
+        if (_isDrawMode)
+        {
+            _isDrawMode = false;
+            DrawModeButton.IsChecked = false;
+            CurveControl.SetDrawMode(false);
+        }
+        if (_isBezierMode)
+        {
+            _isBezierMode = false;
+            BezierModeButton.IsChecked = false;
+            CurveControl.SetBezierMode(false);
+        }
+        SetSlidersEnabled(true);
+
         var s = CurrentSettings;
         if (s != null)
         {
-            s.Gamma = 1.0; s.Brightness = 0.0; s.Contrast = 1.0;
-            s.SCurve = 0.0; s.Highlights = 0.0; s.Shadows = 0.0;
-            s.UseDrawnCurve = false;
-            s.DrawnRamp = null;
+            for (int ch = 0; ch < 3; ch++)
+            {
+                s.Gamma[ch] = 1.0; s.Brightness[ch] = 0.0; s.Contrast[ch] = 1.0;
+                s.SCurve[ch] = 0.0; s.Highlights[ch] = 0.0; s.Shadows[ch] = 0.0;
+                s.UseDrawnCurve[ch] = false;
+                s.DrawnRamp[ch] = null;
+                s.BezierPoints[ch] = null;
+                s.PosterizeSteps[ch] = 0;
+                s.PosterizeRangeMin[ch] = 0.0;
+                s.PosterizeRangeMax[ch] = 1.0;
+                s.PosterizeFeather[ch] = 0.1;
+                s.PosterizeFeatherCurve[ch] = 1.0;
+            }
         }
 
         _suppressEvents = true;
@@ -219,6 +429,10 @@ public partial class MainWindow : Window
         SCurveSlider.Value = 0.0;     HighlightsSlider.Value = 0.0; ShadowsSlider.Value = 0.0;
         GammaLabel.Text = "1.00";     BrightnessLabel.Text = "0.00"; ContrastLabel.Text = "1.00";
         SCurveLabel.Text = "0.00";    HighlightsLabel.Text = "0.00"; ShadowsLabel.Text = "0.00";
+        PosterizeStepsSlider.Value = 0; PosterizeRangeMinSlider.Value = 0.0;
+        PosterizeRangeMaxSlider.Value = 1.0; PosterizeFeatherSlider.Value = 0.1;
+        PosterizeStepsLabel.Text = "0"; PosterizeRangeMinLabel.Text = "0.00";
+        PosterizeRangeMaxLabel.Text = "1.00"; PosterizeFeatherLabel.Text = "0.10";
         _suppressEvents = false;
 
         RefreshCurve();
@@ -232,18 +446,18 @@ public partial class MainWindow : Window
         var s = CurrentSettings;
         if (s == null) return;
 
-        var ramp = s.UseDrawnCurve && s.DrawnRamp != null
-            ? s.DrawnRamp
-            : GammaCalculator.BuildRamp(s.Gamma, s.Brightness, s.Contrast,
-                                        s.SCurve, s.Highlights, s.Shadows);
-        CurveControl.UpdateRamp(ramp);
+        var ramps = new ushort[3][];
+        for (int ch = 0; ch < 3; ch++)
+            ramps[ch] = BuildChannelRamp(s, ch);
+
+        CurveControl.UpdateRamps(ramps[0], ramps[1], ramps[2], _activeChannel);
     }
 
     // ── Profile management ───────────────────────────────────────────────────
 
     private void MarkDirty()
     {
-        if (!_isInitialized || string.IsNullOrEmpty(_currentProfileName)) return;
+        if (!_isInitialized || string.IsNullOrEmpty(CurrentProfileName)) return;
         SaveProfileButton.Visibility = Visibility.Visible;
     }
 
@@ -255,44 +469,40 @@ public partial class MainWindow : Window
 
     private void UpdateCurrentProfileLabel()
     {
-        CurrentProfileLabel.Text = string.IsNullOrEmpty(_currentProfileName)
+        CurrentProfileLabel.Text = string.IsNullOrEmpty(CurrentProfileName)
             ? "(none)"
-            : _currentProfileName;
+            : CurrentProfileName;
     }
 
     private void SaveProfileButton_Click(object sender, RoutedEventArgs e)
     {
-        if (string.IsNullOrEmpty(_currentProfileName)) return;
+        if (string.IsNullOrEmpty(CurrentProfileName) || CurrentSettings == null || SelectedDevice == null) return;
 
-        var existing = ProfileService.GetProfile(_currentProfileName);
+        var existing = ProfileService.GetProfile(CurrentProfileName);
         var profile = new Profile
         {
-            Name            = _currentProfileName,
+            Name            = CurrentProfileName,
             HotkeyModifiers = existing?.HotkeyModifiers ?? 0,
             HotkeyVKey      = existing?.HotkeyVKey      ?? 0,
-            // Clone values so the saved profile is independent of live _monitorSettings
-            MonitorSettings = _monitorSettings.ToDictionary(kv => kv.Key, kv => kv.Value.Clone())
+            Settings        = CurrentSettings.Clone()
         };
 
         ProfileService.AddOrUpdate(profile);
-        ProfileService.LastUsedProfileName = _currentProfileName;
+        ProfileService.LastUsedProfileName = CurrentProfileName;
         ProfileService.Save();
 
-        // Advance the loaded snapshot so Revert returns to this saved state
-        _loadedMonitorSettings.Clear();
-        foreach (var kv in _monitorSettings)
-            _loadedMonitorSettings[kv.Key] = kv.Value.Clone();
+        _loadedSettings[SelectedDevice] = CurrentSettings.Clone();
 
         ClearDirty();
     }
 
     private void RevertProfileButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!_loadedMonitorSettings.Any()) return;
+        if (SelectedDevice == null || !_loadedSettings.TryGetValue(SelectedDevice, out var loaded)) return;
 
-        foreach (var kv in _loadedMonitorSettings)
-            _monitorSettings[kv.Key] = kv.Value.Clone();
+        _monitorSettings[SelectedDevice] = loaded.Clone();
 
+        RestoreCurveMode();
         LoadUIFromCurrentSettings();
         ApplyCurrentToMonitor();
         ClearDirty();
@@ -303,22 +513,61 @@ public partial class MainWindow : Window
         new ProfilesWindow(this).ShowDialog();
     }
 
+    private void RestoreCurveMode()
+    {
+        // Reset current mode state
+        if (_isDrawMode)
+        {
+            _isDrawMode = false;
+            DrawModeButton.IsChecked = false;
+            CurveControl.SetDrawMode(false);
+        }
+        if (_isBezierMode)
+        {
+            _isBezierMode = false;
+            BezierModeButton.IsChecked = false;
+            CurveControl.SetBezierMode(false);
+        }
+        SetSlidersEnabled(true);
+
+        var cs = CurrentSettings;
+        if (cs == null) return;
+
+        switch (cs.CurveMode)
+        {
+            case 2: // Bezier
+                _isBezierMode = true;
+                BezierModeButton.IsChecked = true;
+                SetSlidersEnabled(false);
+                CurveControl.SetBezierMode(true, cs.BezierPoints);
+                break;
+            case 1: // Draw
+                _isDrawMode = true;
+                DrawModeButton.IsChecked = true;
+                SetSlidersEnabled(false);
+                CurveControl.UpdateRamps(
+                    cs.DrawnRamp[0] ?? new ushort[256],
+                    cs.DrawnRamp[1] ?? new ushort[256],
+                    cs.DrawnRamp[2] ?? new ushort[256],
+                    _activeChannel);
+                CurveControl.SetDrawMode(true);
+                break;
+        }
+    }
+
     internal void ApplyProfile(Profile profile)
     {
-        _currentProfileName = profile.Name;
+        if (SelectedDevice == null) return;
+
+        CurrentProfileName = profile.Name;
         ProfileService.LastUsedProfileName = profile.Name;
 
-        foreach (var kv in profile.MonitorSettings)
-            _monitorSettings[kv.Key] = kv.Value.Clone();
+        _monitorSettings[SelectedDevice] = profile.Settings.Clone();
+        _loadedSettings[SelectedDevice] = profile.Settings.Clone();
 
-        // Snapshot for Revert
-        _loadedMonitorSettings.Clear();
-        foreach (var kv in profile.MonitorSettings)
-            _loadedMonitorSettings[kv.Key] = kv.Value.Clone();
+        MonitorService.ApplyRamp(SelectedDevice, BuildRampForSettings(_monitorSettings[SelectedDevice]));
 
-        foreach (var kv in profile.MonitorSettings)
-            MonitorService.ApplyRamp(kv.Key, BuildRampForSettings(kv.Value));
-
+        RestoreCurveMode();
         LoadUIFromCurrentSettings();
         UpdateCurrentProfileLabel();
         ClearDirty();
@@ -343,17 +592,19 @@ public partial class MainWindow : Window
         }
     }
 
-    internal Dictionary<string, MonitorSettings> CurrentMonitorSettings()
-        => _monitorSettings.ToDictionary(kv => kv.Key, kv => kv.Value);
+    internal MonitorSettings? CurrentSettingsClone()
+        => CurrentSettings?.Clone();
 
     internal void OnProfileDeleted(string name)
     {
-        if (_currentProfileName == name)
+        // Clear the profile name from any monitor that had it loaded
+        foreach (var key in _monitorProfileNames.Keys.ToList())
         {
-            _currentProfileName = string.Empty;
-            UpdateCurrentProfileLabel();
-            ClearDirty();
+            if (_monitorProfileNames[key] == name)
+                _monitorProfileNames[key] = string.Empty;
         }
+        UpdateCurrentProfileLabel();
+        ClearDirty();
     }
 
     // ── Tray / close ─────────────────────────────────────────────────────────

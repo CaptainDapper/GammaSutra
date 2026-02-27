@@ -55,6 +55,47 @@ public static class GammaCalculator
         };
     }
 
+    public static ushort[] ApplyPosterize(ushort[] ramp, int steps, double rangeMin, double rangeMax,
+        double feather, double featherCurve)
+    {
+        if (steps < 2) return ramp;
+
+        var result = new ushort[256];
+        for (int i = 0; i < 256; i++)
+        {
+            double t = i / 255.0;
+            double original = ramp[i];
+
+            // Compute blend factor (0 = smooth, 1 = fully posterized)
+            double blend;
+            double innerMin = rangeMin + feather;
+            double innerMax = rangeMax - feather;
+
+            if (t < rangeMin || t > rangeMax)
+                blend = 0.0;
+            else if (t >= innerMin && t <= innerMax)
+                blend = 1.0;
+            else if (t < innerMin)
+            {
+                double linearFade = feather > 0 ? (t - rangeMin) / feather : 1.0;
+                blend = Math.Pow(Math.Clamp(linearFade, 0.0, 1.0), featherCurve);
+            }
+            else // t > innerMax
+            {
+                double linearFade = feather > 0 ? (rangeMax - t) / feather : 1.0;
+                blend = Math.Pow(Math.Clamp(linearFade, 0.0, 1.0), featherCurve);
+            }
+
+            // Quantize
+            double v = original / 65280.0;
+            double q = Math.Round(v * (steps - 1)) / (steps - 1);
+            double quantized = q * 65280.0;
+
+            result[i] = (ushort)Math.Clamp(original + blend * (quantized - original), 0, 65280);
+        }
+        return result;
+    }
+
     /// <summary>Returns a linear (identity) ramp — ramp[i] = i * 256, max = 65280.</summary>
     public static NativeMethods.RAMP BuildLinearRamp()
     {

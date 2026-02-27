@@ -90,6 +90,14 @@ Because f.lux is for color temperature, monitor OSD is a pain in the ass, and NV
 
 ---
 
+## Support the Project
+
+If Gamma Sutra saved you from one more trip into your monitor's cursed OSD menu, or you just appreciate free software that doesn't try to upsell you on a "Pro" tier — consider tossing a few bucks my way. It helps keep the lights on (at the correct gamma level, obviously).
+
+**[Donate here](https://streamlabs.com/captaindapper/tip)** — any amount is genuinely appreciated.
+
+---
+
 ## License
 
 MIT. Go nuts.

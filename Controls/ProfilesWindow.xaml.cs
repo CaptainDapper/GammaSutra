@@ -105,7 +105,7 @@ public partial class ProfilesWindow : Window
             Name            = name,
             HotkeyModifiers = existing?.HotkeyModifiers ?? 0,
             HotkeyVKey      = existing?.HotkeyVKey      ?? 0,
-            MonitorSettings = _mainWindow.CurrentMonitorSettings()
+            Settings        = _mainWindow.CurrentSettingsClone() ?? new MonitorSettings()
         };
 
         _mainWindow.ProfileService.AddOrUpdate(profile);
