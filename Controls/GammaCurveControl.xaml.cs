@@ -34,6 +34,16 @@ public partial class GammaCurveControl : UserControl
     private ushort[][] _ramps = [new ushort[256], new ushort[256], new ushort[256]];
     private int _activeChannel = -1; // -1 = All, 0=R, 1=G, 2=B
 
+    // Zoom/Pan state
+    private double _zoomLevel = 1.0;
+    private Point _panOffset = new(0, 0);
+    private bool _isPanning = false;
+    private Point _panStart;
+    private Point _panOffsetStart;
+    private const double MinZoom = 1.0;
+    private const double MaxZoom = 10.0;
+    private const double ZoomFactor = 1.15;
+
     // Node mode state (per-channel)
     private bool _isNodeMode = false;
     private List<NodePoint>[] _nodePointsPerChannel =
@@ -79,6 +89,69 @@ public partial class GammaCurveControl : UserControl
 
         CurveCanvas.SizeChanged += (_, _) => DrawCurve();
         Loaded += (_, _) => DrawCurve();
+    }
+
+    // ── Zoom/Pan ──────────────────────────────────────────────────────────────
+
+    private void ApplyCanvasTransform()
+    {
+        var tg = new TransformGroup();
+        tg.Children.Add(new ScaleTransform(_zoomLevel, _zoomLevel));
+        tg.Children.Add(new TranslateTransform(_panOffset.X, _panOffset.Y));
+        CurveCanvas.RenderTransform = tg;
+
+        ResetZoomButton.Visibility = _zoomLevel > 1.01 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>Transforms a mouse position (in control space) to canvas pixel space accounting for zoom/pan.</summary>
+    private Point MouseToCanvas(Point mousePos)
+    {
+        if (CurveCanvas.RenderTransform is TransformGroup tg)
+        {
+            var inverse = tg.Inverse;
+            if (inverse != null)
+                return inverse.Transform(mousePos);
+        }
+        return mousePos;
+    }
+
+    private void CurveCanvas_MouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        var mousePos = e.GetPosition(CurveCanvas);
+        // mousePos is already in canvas space (WPF transforms it)
+        // We need the position in parent space for zoom-toward-cursor
+        var parentPos = e.GetPosition(this);
+
+        double oldZoom = _zoomLevel;
+        if (e.Delta > 0)
+            _zoomLevel = Math.Min(_zoomLevel * ZoomFactor, MaxZoom);
+        else
+            _zoomLevel = Math.Max(_zoomLevel / ZoomFactor, MinZoom);
+
+        // Adjust pan so the point under cursor stays fixed
+        double ratio = _zoomLevel / oldZoom;
+        _panOffset = new Point(
+            parentPos.X - ratio * (parentPos.X - _panOffset.X),
+            parentPos.Y - ratio * (parentPos.Y - _panOffset.Y));
+
+        // Clamp pan when at min zoom
+        if (_zoomLevel <= MinZoom + 0.01)
+            _panOffset = new Point(0, 0);
+
+        ApplyCanvasTransform();
+        e.Handled = true;
+    }
+
+    private void ResetZoomButton_Click(object sender, RoutedEventArgs e)
+    {
+        ResetZoom();
+    }
+
+    public void ResetZoom()
+    {
+        _zoomLevel = 1.0;
+        _panOffset = new Point(0, 0);
+        ApplyCanvasTransform();
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -545,18 +618,44 @@ public partial class GammaCurveControl : UserControl
 
     private void CurveCanvas_MouseDown(object sender, MouseButtonEventArgs e)
     {
+        if (e.ChangedButton == MouseButton.Middle)
+        {
+            _isPanning = true;
+            _panStart = e.GetPosition(this);
+            _panOffsetStart = _panOffset;
+            CurveCanvas.CaptureMouse();
+            e.Handled = true;
+            return;
+        }
         if (_isBezierMode) { BezierMouseDown(e); return; }
         if (_isNodeMode) { NodeMouseDown(e); return; }
     }
 
     private void CurveCanvas_MouseMove(object sender, MouseEventArgs e)
     {
+        if (_isPanning)
+        {
+            var pos = e.GetPosition(this);
+            _panOffset = new Point(
+                _panOffsetStart.X + (pos.X - _panStart.X),
+                _panOffsetStart.Y + (pos.Y - _panStart.Y));
+            ApplyCanvasTransform();
+            e.Handled = true;
+            return;
+        }
         if (_isBezierMode) { BezierMouseMove(e); return; }
         if (_isNodeMode) { NodeMouseMove(e); return; }
     }
 
     private void CurveCanvas_MouseUp(object sender, MouseButtonEventArgs e)
     {
+        if (e.ChangedButton == MouseButton.Middle && _isPanning)
+        {
+            _isPanning = false;
+            CurveCanvas.ReleaseMouseCapture();
+            e.Handled = true;
+            return;
+        }
         if (_isBezierMode) { BezierMouseUp(e); return; }
         if (_isNodeMode) { NodeMouseUp(e); return; }
     }

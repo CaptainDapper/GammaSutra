@@ -6,9 +6,18 @@
              mc:Ignorable="d">
     <Grid>
         <Canvas x:Name="CurveCanvas"
+                ClipToBounds="True"
                 Background="#111111"
                 MouseDown="CurveCanvas_MouseDown"
                 MouseMove="CurveCanvas_MouseMove"
-                MouseUp="CurveCanvas_MouseUp"/>
+                MouseUp="CurveCanvas_MouseUp"
+                MouseWheel="CurveCanvas_MouseWheel"/>
+        <Button x:Name="ResetZoomButton"
+                Content="Reset Zoom"
+                HorizontalAlignment="Right" VerticalAlignment="Top"
+                Margin="0,4,4,0" Padding="4,2"
+                FontSize="10" Opacity="0.7"
+                Visibility="Collapsed"
+                Click="ResetZoomButton_Click"/>
     </Grid>
 </UserControl>
