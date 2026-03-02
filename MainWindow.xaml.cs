@@ -210,117 +210,100 @@ public partial class MainWindow : Window
         MarkDirty();
     }
 
-    // ── Draw mode ────────────────────────────────────────────────────────────
+    // ── Mode switching (Sliders / Draw / Bezier) ────────────────────────────
 
-    private void DrawModeButton_Checked(object sender, RoutedEventArgs e)
+    private void ModeButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_isBezierMode)
-        {
-            _isBezierMode = false;
-            BezierModeButton.IsChecked = false;
-            CurveControl.SetBezierMode(false);
-        }
+        // Radio-style: prevent unchecking the active button
+        if (sender == SlidersModeButton && _isDrawMode == false && _isBezierMode == false)
+            { SlidersModeButton.IsChecked = true; return; }
+        if (sender == DrawModeButton && _isDrawMode)
+            { DrawModeButton.IsChecked = true; return; }
+        if (sender == BezierModeButton && _isBezierMode)
+            { BezierModeButton.IsChecked = true; return; }
 
-        _isDrawMode = true;
-        SetSlidersEnabled(false);
+        // Determine which mode was clicked
+        int newMode = sender == DrawModeButton ? 1 : sender == BezierModeButton ? 2 : 0;
 
-        var s = CurrentSettings;
-        if (s != null)
-        {
-            s.CurveMode = 1;
-            // Initialize drawn ramps for channels that don't have one yet
-            for (int ch = 0; ch < 3; ch++)
-            {
-                if (!s.UseDrawnCurve[ch])
-                {
-                    s.DrawnRamp[ch] = GammaCalculator.BuildRamp(
-                        s.Gamma[ch], s.Brightness[ch], s.Contrast[ch],
-                        s.SCurve[ch], s.Highlights[ch], s.Shadows[ch]);
-                    s.UseDrawnCurve[ch] = true;
-                }
-            }
-        }
-
-        CurveControl.UpdateRamps(
-            s?.DrawnRamp[0] ?? new ushort[256],
-            s?.DrawnRamp[1] ?? new ushort[256],
-            s?.DrawnRamp[2] ?? new ushort[256],
-            _activeChannel);
-        CurveControl.SetDrawMode(true);
-    }
-
-    private void DrawModeButton_Unchecked(object sender, RoutedEventArgs e)
-    {
-        _isDrawMode = false;
-        if (!_isBezierMode)
-            SetSlidersEnabled(true);
-
-        var s = CurrentSettings;
-        if (s != null && !_isBezierMode)
-        {
-            s.CurveMode = 0;
-            s.UseDrawnCurve[0] = s.UseDrawnCurve[1] = s.UseDrawnCurve[2] = false;
-        }
-
-        CurveControl.SetDrawMode(false);
-        if (!_isBezierMode)
-        {
-            RefreshCurve();
-            ApplyCurrentToMonitor();
-        }
-    }
-
-    // ── Bezier mode ───────────────────────────────────────────────────────────
-
-    private void BezierModeButton_Checked(object sender, RoutedEventArgs e)
-    {
+        // Exit current mode
         if (_isDrawMode)
         {
             _isDrawMode = false;
-            DrawModeButton.IsChecked = false;
             CurveControl.SetDrawMode(false);
         }
+        if (_isBezierMode)
+        {
+            _isBezierMode = false;
+            CurveControl.SetBezierMode(false);
+        }
 
-        _isBezierMode = true;
-        SetSlidersEnabled(false);
+        // Update toggle states
+        SlidersModeButton.IsChecked = newMode == 0;
+        DrawModeButton.IsChecked    = newMode == 1;
+        BezierModeButton.IsChecked  = newMode == 2;
 
         var s = CurrentSettings;
-        if (s != null)
-        {
-            s.CurveMode = 2;
-            CurveControl.SetBezierMode(true, s.BezierPoints);
 
-            for (int ch = 0; ch < 3; ch++)
-            {
-                s.DrawnRamp[ch] = BezierEvaluator.Evaluate(
-                    s.BezierPoints[ch] ?? BezierEvaluator.DefaultPoints());
-                s.UseDrawnCurve[ch] = true;
-                s.BezierPoints[ch] ??= CurveControl.GetBezierPoints(ch);
-            }
-            ApplyCurrentToMonitor();
-        }
-        else
+        // Enter new mode
+        switch (newMode)
         {
-            CurveControl.SetBezierMode(true);
-        }
-    }
+            case 0: // Sliders
+                SetSlidersEnabled(true);
+                if (s != null)
+                {
+                    s.CurveMode = 0;
+                    s.UseDrawnCurve[0] = s.UseDrawnCurve[1] = s.UseDrawnCurve[2] = false;
+                }
+                RefreshCurve();
+                ApplyCurrentToMonitor();
+                break;
 
-    private void BezierModeButton_Unchecked(object sender, RoutedEventArgs e)
-    {
-        _isBezierMode = false;
-        CurveControl.SetBezierMode(false);
+            case 1: // Draw
+                SetSlidersEnabled(false);
+                if (s != null)
+                {
+                    s.CurveMode = 1;
+                    for (int ch = 0; ch < 3; ch++)
+                    {
+                        if (!s.UseDrawnCurve[ch])
+                        {
+                            s.DrawnRamp[ch] = GammaCalculator.BuildRamp(
+                                s.Gamma[ch], s.Brightness[ch], s.Contrast[ch],
+                                s.SCurve[ch], s.Highlights[ch], s.Shadows[ch]);
+                            s.UseDrawnCurve[ch] = true;
+                        }
+                    }
+                }
+                _isDrawMode = true;
+                CurveControl.UpdateRamps(
+                    s?.DrawnRamp[0] ?? new ushort[256],
+                    s?.DrawnRamp[1] ?? new ushort[256],
+                    s?.DrawnRamp[2] ?? new ushort[256],
+                    _activeChannel);
+                CurveControl.SetDrawMode(true);
+                break;
 
-        if (!_isDrawMode)
-        {
-            SetSlidersEnabled(true);
-            var s = CurrentSettings;
-            if (s != null)
-            {
-                s.CurveMode = 0;
-                s.UseDrawnCurve[0] = s.UseDrawnCurve[1] = s.UseDrawnCurve[2] = false;
-            }
-            RefreshCurve();
-            ApplyCurrentToMonitor();
+            case 2: // Bezier
+                SetSlidersEnabled(false);
+                _isBezierMode = true;
+                if (s != null)
+                {
+                    s.CurveMode = 2;
+                    CurveControl.SetBezierMode(true, s.BezierPoints);
+                    for (int ch = 0; ch < 3; ch++)
+                    {
+                        s.DrawnRamp[ch] = BezierEvaluator.Evaluate(
+                            s.BezierPoints[ch] ?? BezierEvaluator.DefaultPoints());
+                        s.UseDrawnCurve[ch] = true;
+                        s.BezierPoints[ch] ??= CurveControl.GetBezierPoints(ch);
+                    }
+                    ApplyCurrentToMonitor();
+                }
+                else
+                {
+                    CurveControl.SetBezierMode(true);
+                }
+                break;
         }
     }
 
@@ -340,6 +323,10 @@ public partial class MainWindow : Window
         SCurveSlider.IsEnabled     = enabled;
         HighlightsSlider.IsEnabled = enabled;
         ShadowsSlider.IsEnabled    = enabled;
+
+        var vis = enabled ? Visibility.Visible : Visibility.Collapsed;
+        SlidersGrid.Visibility = vis;
+        PosterizeExpander.Visibility = vis;
     }
 
     private void CurveControl_DrawnRampChanged(object sender, DrawnRampChangedEventArgs args)
@@ -395,20 +382,22 @@ public partial class MainWindow : Window
         if (_isDrawMode)
         {
             _isDrawMode = false;
-            DrawModeButton.IsChecked = false;
             CurveControl.SetDrawMode(false);
         }
         if (_isBezierMode)
         {
             _isBezierMode = false;
-            BezierModeButton.IsChecked = false;
             CurveControl.SetBezierMode(false);
         }
+        SlidersModeButton.IsChecked = true;
+        DrawModeButton.IsChecked = false;
+        BezierModeButton.IsChecked = false;
         SetSlidersEnabled(true);
 
         var s = CurrentSettings;
         if (s != null)
         {
+            s.CurveMode = 0;
             for (int ch = 0; ch < 3; ch++)
             {
                 s.Gamma[ch] = 1.0; s.Brightness[ch] = 0.0; s.Contrast[ch] = 1.0;
@@ -519,38 +508,40 @@ public partial class MainWindow : Window
         if (_isDrawMode)
         {
             _isDrawMode = false;
-            DrawModeButton.IsChecked = false;
             CurveControl.SetDrawMode(false);
         }
         if (_isBezierMode)
         {
             _isBezierMode = false;
-            BezierModeButton.IsChecked = false;
             CurveControl.SetBezierMode(false);
         }
-        SetSlidersEnabled(true);
 
         var cs = CurrentSettings;
-        if (cs == null) return;
+        int mode = cs?.CurveMode ?? 0;
 
-        switch (cs.CurveMode)
+        SlidersModeButton.IsChecked = mode == 0;
+        DrawModeButton.IsChecked    = mode == 1;
+        BezierModeButton.IsChecked  = mode == 2;
+
+        switch (mode)
         {
             case 2: // Bezier
                 _isBezierMode = true;
-                BezierModeButton.IsChecked = true;
                 SetSlidersEnabled(false);
-                CurveControl.SetBezierMode(true, cs.BezierPoints);
+                CurveControl.SetBezierMode(true, cs!.BezierPoints);
                 break;
             case 1: // Draw
                 _isDrawMode = true;
-                DrawModeButton.IsChecked = true;
                 SetSlidersEnabled(false);
                 CurveControl.UpdateRamps(
-                    cs.DrawnRamp[0] ?? new ushort[256],
+                    cs!.DrawnRamp[0] ?? new ushort[256],
                     cs.DrawnRamp[1] ?? new ushort[256],
                     cs.DrawnRamp[2] ?? new ushort[256],
                     _activeChannel);
                 CurveControl.SetDrawMode(true);
+                break;
+            default: // Sliders
+                SetSlidersEnabled(true);
                 break;
         }
     }
