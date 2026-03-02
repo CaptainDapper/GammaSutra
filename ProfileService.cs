@@ -6,6 +6,7 @@ namespace GammaControl;
 
 public class ProfileService
 {
+    public const string DefaultProfileName = "Default";
     private static readonly string DataDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "GammaSutra");
@@ -66,7 +67,11 @@ public class ProfileService
             Profiles.Add(profile);
     }
 
-    public void Delete(string name) => Profiles.RemoveAll(p => p.Name == name);
+    public void Delete(string name)
+    {
+        if (name == DefaultProfileName) return;
+        Profiles.RemoveAll(p => p.Name == name);
+    }
 
     private static Profile CreateDefaultProfile() => new() { Name = "Default" };
 

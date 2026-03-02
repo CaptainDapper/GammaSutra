@@ -14,8 +14,9 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, MonitorSettings> _monitorSettings = new();
     private readonly Dictionary<string, MonitorSettings> _loadedSettings = new();
     private readonly Dictionary<string, string> _monitorProfileNames = new();
+    private readonly List<string> _monitorDeviceNames = new();
     private bool _suppressEvents = false;
-    private bool _isDrawMode = false;
+    private bool _isNodeMode = false;
     private bool _isBezierMode = false;
     private bool _isInitialized = false;
     private int _activeChannel = -1; // -1 = All, 0 = R, 1 = G, 2 = B
@@ -51,9 +52,11 @@ public partial class MainWindow : Window
 
     private void PopulateMonitors()
     {
+        _monitorDeviceNames.Clear();
         MonitorComboBox.Items.Clear();
         foreach (var screen in Screen.AllScreens)
         {
+            _monitorDeviceNames.Add(screen.DeviceName);
             MonitorComboBox.Items.Add(screen.DeviceName);
             if (!_monitorSettings.ContainsKey(screen.DeviceName))
                 _monitorSettings[screen.DeviceName] = new MonitorSettings { DeviceName = screen.DeviceName };
@@ -62,7 +65,24 @@ public partial class MainWindow : Window
             MonitorComboBox.SelectedIndex = 0;
     }
 
-    private string? SelectedDevice => MonitorComboBox.SelectedItem as string;
+    private string? SelectedDevice =>
+        MonitorComboBox.SelectedIndex >= 0 && MonitorComboBox.SelectedIndex < _monitorDeviceNames.Count
+            ? _monitorDeviceNames[MonitorComboBox.SelectedIndex]
+            : null;
+
+    private void RefreshMonitorComboDisplay()
+    {
+        int saved = MonitorComboBox.SelectedIndex;
+        _suppressEvents = true;
+        for (int i = 0; i < _monitorDeviceNames.Count; i++)
+        {
+            var dev = _monitorDeviceNames[i];
+            var profileName = _monitorProfileNames.TryGetValue(dev, out var n) && !string.IsNullOrEmpty(n) ? n : null;
+            MonitorComboBox.Items[i] = profileName != null ? $"{dev} — {profileName}" : dev;
+        }
+        MonitorComboBox.SelectedIndex = saved;
+        _suppressEvents = false;
+    }
 
     private MonitorSettings? CurrentSettings =>
         SelectedDevice is { } dev && _monitorSettings.TryGetValue(dev, out var s) ? s : null;
@@ -75,6 +95,7 @@ public partial class MainWindow : Window
 
     private void MonitorComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_suppressEvents) return;
         LoadUIFromCurrentSettings();
         UpdateCurrentProfileLabel();
         ClearDirty();
@@ -156,7 +177,7 @@ public partial class MainWindow : Window
 
     private void Slider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (!_isInitialized || _suppressEvents || _isDrawMode || _isBezierMode) return;
+        if (!_isInitialized || _suppressEvents || _isNodeMode || _isBezierMode) return;
 
         GammaLabel.Text      = GammaSlider.Value.ToString("F2");
         BrightnessLabel.Text = BrightnessSlider.Value.ToString("F2");
@@ -215,21 +236,21 @@ public partial class MainWindow : Window
     private void ModeButton_Click(object sender, RoutedEventArgs e)
     {
         // Radio-style: prevent unchecking the active button
-        if (sender == SlidersModeButton && _isDrawMode == false && _isBezierMode == false)
+        if (sender == SlidersModeButton && _isNodeMode == false && _isBezierMode == false)
             { SlidersModeButton.IsChecked = true; return; }
-        if (sender == DrawModeButton && _isDrawMode)
-            { DrawModeButton.IsChecked = true; return; }
+        if (sender == NodeModeButton && _isNodeMode)
+            { NodeModeButton.IsChecked = true; return; }
         if (sender == BezierModeButton && _isBezierMode)
             { BezierModeButton.IsChecked = true; return; }
 
         // Determine which mode was clicked
-        int newMode = sender == DrawModeButton ? 1 : sender == BezierModeButton ? 2 : 0;
+        int newMode = sender == NodeModeButton ? 1 : sender == BezierModeButton ? 2 : 0;
 
         // Exit current mode
-        if (_isDrawMode)
+        if (_isNodeMode)
         {
-            _isDrawMode = false;
-            CurveControl.SetDrawMode(false);
+            _isNodeMode = false;
+            CurveControl.SetNodeMode(false);
         }
         if (_isBezierMode)
         {
@@ -239,7 +260,7 @@ public partial class MainWindow : Window
 
         // Update toggle states
         SlidersModeButton.IsChecked = newMode == 0;
-        DrawModeButton.IsChecked    = newMode == 1;
+        NodeModeButton.IsChecked    = newMode == 1;
         BezierModeButton.IsChecked  = newMode == 2;
 
         var s = CurrentSettings;
@@ -258,29 +279,27 @@ public partial class MainWindow : Window
                 ApplyCurrentToMonitor();
                 break;
 
-            case 1: // Draw
+            case 1: // Node
                 SetSlidersEnabled(false);
+                _isNodeMode = true;
                 if (s != null)
                 {
                     s.CurveMode = 1;
                     for (int ch = 0; ch < 3; ch++)
+                        s.NodePoints[ch] ??= MonotoneSplineEvaluator.DefaultPoints();
+
+                    CurveControl.SetNodeMode(true, s.NodePoints);
+                    for (int ch = 0; ch < 3; ch++)
                     {
-                        if (!s.UseDrawnCurve[ch])
-                        {
-                            s.DrawnRamp[ch] = GammaCalculator.BuildRamp(
-                                s.Gamma[ch], s.Brightness[ch], s.Contrast[ch],
-                                s.SCurve[ch], s.Highlights[ch], s.Shadows[ch]);
-                            s.UseDrawnCurve[ch] = true;
-                        }
+                        s.DrawnRamp[ch] = MonotoneSplineEvaluator.Evaluate(s.NodePoints[ch]!);
+                        s.UseDrawnCurve[ch] = true;
                     }
+                    ApplyCurrentToMonitor();
                 }
-                _isDrawMode = true;
-                CurveControl.UpdateRamps(
-                    s?.DrawnRamp[0] ?? new ushort[256],
-                    s?.DrawnRamp[1] ?? new ushort[256],
-                    s?.DrawnRamp[2] ?? new ushort[256],
-                    _activeChannel);
-                CurveControl.SetDrawMode(true);
+                else
+                {
+                    CurveControl.SetNodeMode(true);
+                }
                 break;
 
             case 2: // Bezier
@@ -312,6 +331,14 @@ public partial class MainWindow : Window
         var s = CurrentSettings;
         if (s == null) return;
         s.BezierPoints[args.Channel] = args.Points;
+        MarkDirty();
+    }
+
+    private void CurveControl_NodePointsChanged(object sender, NodePointsChangedEventArgs args)
+    {
+        var s = CurrentSettings;
+        if (s == null) return;
+        s.NodePoints[args.Channel] = args.Points;
         MarkDirty();
     }
 
@@ -378,10 +405,10 @@ public partial class MainWindow : Window
     {
         MonitorService.ResetAll();
 
-        if (_isDrawMode)
+        if (_isNodeMode)
         {
-            _isDrawMode = false;
-            CurveControl.SetDrawMode(false);
+            _isNodeMode = false;
+            CurveControl.SetNodeMode(false);
         }
         if (_isBezierMode)
         {
@@ -389,7 +416,7 @@ public partial class MainWindow : Window
             CurveControl.SetBezierMode(false);
         }
         SlidersModeButton.IsChecked = true;
-        DrawModeButton.IsChecked = false;
+        NodeModeButton.IsChecked = false;
         BezierModeButton.IsChecked = false;
         SetSlidersEnabled(true);
 
@@ -404,6 +431,7 @@ public partial class MainWindow : Window
                 s.UseDrawnCurve[ch] = false;
                 s.DrawnRamp[ch] = null;
                 s.BezierPoints[ch] = null;
+                s.NodePoints[ch] = null;
                 s.PosterizeSteps[ch] = 0;
                 s.PosterizeRangeMin[ch] = 0.0;
                 s.PosterizeRangeMax[ch] = 1.0;
@@ -423,8 +451,12 @@ public partial class MainWindow : Window
         PosterizeRangeMaxLabel.Text = "1.00"; PosterizeFeatherLabel.Text = "0.10";
         _suppressEvents = false;
 
+        CurrentProfileName = string.Empty;
+        UpdateCurrentProfileLabel();
+        RefreshMonitorComboDisplay();
+
         RefreshCurve();
-        MarkDirty();
+        ClearDirty();
     }
 
     // ── Curve refresh ────────────────────────────────────────────────────────
@@ -504,10 +536,10 @@ public partial class MainWindow : Window
     private void RestoreCurveMode()
     {
         // Reset current mode state
-        if (_isDrawMode)
+        if (_isNodeMode)
         {
-            _isDrawMode = false;
-            CurveControl.SetDrawMode(false);
+            _isNodeMode = false;
+            CurveControl.SetNodeMode(false);
         }
         if (_isBezierMode)
         {
@@ -519,7 +551,7 @@ public partial class MainWindow : Window
         int mode = cs?.CurveMode ?? 0;
 
         SlidersModeButton.IsChecked = mode == 0;
-        DrawModeButton.IsChecked    = mode == 1;
+        NodeModeButton.IsChecked    = mode == 1;
         BezierModeButton.IsChecked  = mode == 2;
 
         switch (mode)
@@ -529,15 +561,12 @@ public partial class MainWindow : Window
                 SetSlidersEnabled(false);
                 CurveControl.SetBezierMode(true, cs!.BezierPoints);
                 break;
-            case 1: // Draw
-                _isDrawMode = true;
+            case 1: // Node
+                _isNodeMode = true;
                 SetSlidersEnabled(false);
-                CurveControl.UpdateRamps(
-                    cs!.DrawnRamp[0] ?? new ushort[256],
-                    cs.DrawnRamp[1] ?? new ushort[256],
-                    cs.DrawnRamp[2] ?? new ushort[256],
-                    _activeChannel);
-                CurveControl.SetDrawMode(true);
+                for (int ch = 0; ch < 3; ch++)
+                    cs!.NodePoints[ch] ??= MonotoneSplineEvaluator.DefaultPoints();
+                CurveControl.SetNodeMode(true, cs!.NodePoints);
                 break;
             default: // Sliders
                 SetSlidersEnabled(true);
@@ -560,6 +589,7 @@ public partial class MainWindow : Window
         RestoreCurveMode();
         LoadUIFromCurrentSettings();
         UpdateCurrentProfileLabel();
+        RefreshMonitorComboDisplay();
         ClearDirty();
     }
 
@@ -582,18 +612,38 @@ public partial class MainWindow : Window
         }
     }
 
+    internal IReadOnlyDictionary<string, string> MonitorProfileNames => _monitorProfileNames;
+    internal IReadOnlyList<string> MonitorDeviceNames => _monitorDeviceNames;
+
     internal MonitorSettings? CurrentSettingsClone()
         => CurrentSettings?.Clone();
 
-    internal void OnProfileDeleted(string name)
+    internal void ResetMonitorsWithProfile(string name)
     {
-        // Clear the profile name from any monitor that had it loaded
-        foreach (var key in _monitorProfileNames.Keys.ToList())
+        foreach (var dev in _monitorDeviceNames)
         {
-            if (_monitorProfileNames[key] == name)
-                _monitorProfileNames[key] = string.Empty;
+            if (!_monitorProfileNames.TryGetValue(dev, out var pn) || pn != name)
+                continue;
+
+            // Reset settings to identity
+            var fresh = new MonitorSettings { DeviceName = dev };
+            _monitorSettings[dev] = fresh;
+            _loadedSettings.Remove(dev);
+            _monitorProfileNames[dev] = string.Empty;
+
+            // Apply identity ramp to hardware
+            MonitorService.ApplyRamp(dev, BuildRampForSettings(fresh));
         }
+
+        // If the current monitor was affected, reload UI
+        if (SelectedDevice is { } sel && _monitorSettings.TryGetValue(sel, out _))
+        {
+            RestoreCurveMode();
+            LoadUIFromCurrentSettings();
+        }
+
         UpdateCurrentProfileLabel();
+        RefreshMonitorComboDisplay();
         ClearDirty();
     }
 

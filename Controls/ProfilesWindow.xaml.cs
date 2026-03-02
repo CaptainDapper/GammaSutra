@@ -78,6 +78,8 @@ public partial class ProfilesWindow : Window
             Margin = new Thickness(4, 0, 0, 0)
         };
         deleteBtn.Click += (_, _) => DeleteProfile(profile);
+        if (profile.Name == ProfileService.DefaultProfileName)
+            deleteBtn.Visibility = Visibility.Collapsed;
 
         Grid.SetColumn(nameBlock,  0);
         Grid.SetColumn(hotkeyBlock, 1);
@@ -105,7 +107,7 @@ public partial class ProfilesWindow : Window
             Name            = name,
             HotkeyModifiers = existing?.HotkeyModifiers ?? 0,
             HotkeyVKey      = existing?.HotkeyVKey      ?? 0,
-            Settings        = _mainWindow.CurrentSettingsClone() ?? new MonitorSettings()
+            Settings        = new MonitorSettings()
         };
 
         _mainWindow.ProfileService.AddOrUpdate(profile);
@@ -123,10 +125,11 @@ public partial class ProfilesWindow : Window
 
     private void DeleteProfile(Profile profile)
     {
-        _mainWindow.ProfileService.Delete(profile.Name);
+        var name = profile.Name;
+        _mainWindow.ProfileService.Delete(name);
         _mainWindow.ProfileService.Save();
         _mainWindow.ReRegisterHotkeys();
-        _mainWindow.OnProfileDeleted(profile.Name);
+        _mainWindow.ResetMonitorsWithProfile(name);
         CancelCapture();
         RefreshList();
     }
