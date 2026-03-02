@@ -16,6 +16,7 @@ public class MonitorSettings
     public bool[] UseDrawnCurve { get; set; } = [false, false, false];
     public ushort[]?[] DrawnRamp { get; set; } = [null, null, null];
     public List<BezierPoint>?[] BezierPoints { get; set; } = [null, null, null];
+    public List<NodePoint>?[] NodePoints { get; set; } = [null, null, null];
     public int[] PosterizeSteps { get; set; } = [0, 0, 0];
     public double[] PosterizeRangeMin { get; set; } = [0.0, 0.0, 0.0];
     public double[] PosterizeRangeMax { get; set; } = [1.0, 1.0, 1.0];
@@ -39,6 +40,9 @@ public class MonitorSettings
         BezierPoints        = [BezierPoints[0]?.Select(p => p.Clone()).ToList(),
                                BezierPoints[1]?.Select(p => p.Clone()).ToList(),
                                BezierPoints[2]?.Select(p => p.Clone()).ToList()],
+        NodePoints          = [NodePoints[0]?.Select(p => p.Clone()).ToList(),
+                               NodePoints[1]?.Select(p => p.Clone()).ToList(),
+                               NodePoints[2]?.Select(p => p.Clone()).ToList()],
         PosterizeSteps      = (int[])PosterizeSteps.Clone(),
         PosterizeRangeMin   = (double[])PosterizeRangeMin.Clone(),
         PosterizeRangeMax   = (double[])PosterizeRangeMax.Clone(),

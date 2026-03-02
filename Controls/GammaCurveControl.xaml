@@ -5,60 +5,10 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              mc:Ignorable="d">
     <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>   <!-- top horizontal skew -->
-            <RowDefinition Height="*"/>      <!-- canvas + vertical skews -->
-            <RowDefinition Height="Auto"/>   <!-- bottom horizontal skew -->
-        </Grid.RowDefinitions>
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="Auto"/> <!-- left vertical skew -->
-            <ColumnDefinition Width="*"/>    <!-- canvas -->
-            <ColumnDefinition Width="Auto"/> <!-- right vertical skew -->
-        </Grid.ColumnDefinitions>
-
-        <!-- Top: compress/expand from the bright (right) end of the input axis.
-             Thumb position = input index where the curve peaks. Default = 255 (far right). -->
-        <Slider x:Name="TopSkewSlider"
-                Grid.Row="0" Grid.Column="1"
-                Orientation="Horizontal"
-                Minimum="0" Maximum="255" Value="255"
-                Height="22" Visibility="Collapsed" Margin="0,0,0,4"
-                ValueChanged="TopSkewSlider_ValueChanged"
-                ToolTip="Top skew — input index where curve reaches max (bakes on release)"/>
-
-        <!-- Left: shifts black-end output value, tapers to zero at white end. -->
-        <Slider x:Name="LeftSkewSlider"
-                Grid.Row="1" Grid.Column="0"
-                Orientation="Vertical"
-                Minimum="0" Maximum="65280" Width="22"
-                Visibility="Collapsed" Margin="0,0,4,0"
-                ValueChanged="LeftSkewSlider_ValueChanged"
-                ToolTip="Left skew — shifts black-end output"/>
-
         <Canvas x:Name="CurveCanvas"
-                Grid.Row="1" Grid.Column="1"
                 Background="#111111"
                 MouseDown="CurveCanvas_MouseDown"
                 MouseMove="CurveCanvas_MouseMove"
                 MouseUp="CurveCanvas_MouseUp"/>
-
-        <!-- Right: shifts white-end output value, tapers to zero at black end. -->
-        <Slider x:Name="RightSkewSlider"
-                Grid.Row="1" Grid.Column="2"
-                Orientation="Vertical"
-                Minimum="0" Maximum="65280" Width="22"
-                Visibility="Collapsed" Margin="4,0,0,0"
-                ValueChanged="RightSkewSlider_ValueChanged"
-                ToolTip="Right skew — shifts white-end output"/>
-
-        <!-- Bottom: compress/expand from the dark (left) end of the input axis.
-             Thumb position = input index where curve first leaves zero. Default = 0 (far left). -->
-        <Slider x:Name="BottomSkewSlider"
-                Grid.Row="2" Grid.Column="1"
-                Orientation="Horizontal"
-                Minimum="0" Maximum="255" Value="0"
-                Height="22" Visibility="Collapsed" Margin="0,4,0,0"
-                ValueChanged="BottomSkewSlider_ValueChanged"
-                ToolTip="Bottom skew — input index where curve leaves zero (bakes on release)"/>
     </Grid>
 </UserControl>

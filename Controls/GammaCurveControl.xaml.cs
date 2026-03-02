@@ -1,6 +1,5 @@
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
@@ -24,19 +23,26 @@ public class BezierPointsChangedEventArgs : EventArgs
     public List<BezierPoint> Points { get; init; } = null!;
 }
 
+public class NodePointsChangedEventArgs : EventArgs
+{
+    public int Channel { get; init; }
+    public List<NodePoint> Points { get; init; } = null!;
+}
+
 public partial class GammaCurveControl : UserControl
 {
     private ushort[][] _ramps = [new ushort[256], new ushort[256], new ushort[256]];
     private int _activeChannel = -1; // -1 = All, 0=R, 1=G, 2=B
-    private bool _isDrawMode = false;
-    private bool _isDrawing = false;
-    private int _lastDrawX = -1;
-    private ushort _lastDrawY = 0;
-    private bool _suppressSkewEvents = false;
 
-    // Horizontal skew — non-destructive overlay, baked on slider release
-    private double _topSkewX = 255.0;
-    private double _bottomSkewX = 0.0;
+    // Node mode state (per-channel)
+    private bool _isNodeMode = false;
+    private List<NodePoint>[] _nodePointsPerChannel =
+    [
+        MonotoneSplineEvaluator.DefaultPoints(),
+        MonotoneSplineEvaluator.DefaultPoints(),
+        MonotoneSplineEvaluator.DefaultPoints()
+    ];
+    private int _dragNodeIndex = -1;
 
     // Bezier mode state (per-channel)
     private bool _isBezierMode = false;
@@ -52,6 +58,7 @@ public partial class GammaCurveControl : UserControl
 
     public event EventHandler<DrawnRampChangedEventArgs>? DrawnRampChanged;
     public event EventHandler<BezierPointsChangedEventArgs>? BezierPointsChanged;
+    public event EventHandler<NodePointsChangedEventArgs>? NodePointsChanged;
 
     public int ActiveChannel
     {
@@ -59,7 +66,7 @@ public partial class GammaCurveControl : UserControl
         set { _activeChannel = value; DrawCurve(); }
     }
 
-    // The channel index used for draw/bezier interaction
+    // The channel index used for node/bezier interaction
     private int EditChannel => _activeChannel < 0 ? 0 : _activeChannel;
 
     public GammaCurveControl()
@@ -71,14 +78,7 @@ public partial class GammaCurveControl : UserControl
                 _ramps[ch][i] = (ushort)(i * 256);
 
         CurveCanvas.SizeChanged += (_, _) => DrawCurve();
-        Loaded += (_, _) =>
-        {
-            DrawCurve();
-            TopSkewSlider.AddHandler(Thumb.DragCompletedEvent,
-                new DragCompletedEventHandler(HSkew_DragCompleted));
-            BottomSkewSlider.AddHandler(Thumb.DragCompletedEvent,
-                new DragCompletedEventHandler(HSkew_DragCompleted));
-        };
+        Loaded += (_, _) => DrawCurve();
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -101,45 +101,41 @@ public partial class GammaCurveControl : UserControl
         DrawCurve();
     }
 
-    public void SetDrawMode(bool enable)
+    public void SetNodeMode(bool enable, List<NodePoint>?[]? pointsPerChannel = null)
     {
-        _isDrawMode = enable;
+        _isNodeMode = enable;
         if (enable)
         {
             _isBezierMode = false;
-            _topSkewX = 255.0;
-            _bottomSkewX = 0.0;
+            if (pointsPerChannel != null)
+            {
+                for (int ch = 0; ch < 3; ch++)
+                {
+                    if (pointsPerChannel[ch] != null)
+                        _nodePointsPerChannel[ch] = pointsPerChannel[ch]!.Select(p => p.Clone()).ToList();
+                    else
+                        _nodePointsPerChannel[ch] = MonotoneSplineEvaluator.DefaultPoints();
+                }
+            }
 
-            _suppressSkewEvents = true;
-            var editRamp = _ramps[EditChannel];
-            LeftSkewSlider.Value  = editRamp[0];
-            RightSkewSlider.Value = editRamp[255];
-            TopSkewSlider.Value    = 255;
-            BottomSkewSlider.Value = 0;
-            _suppressSkewEvents = false;
-
-            LeftSkewSlider.Visibility   = Visibility.Visible;
-            RightSkewSlider.Visibility  = Visibility.Visible;
-            TopSkewSlider.Visibility    = Visibility.Visible;
-            BottomSkewSlider.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            BakeHorizontalSkew();
-            LeftSkewSlider.Visibility   = Visibility.Collapsed;
-            RightSkewSlider.Visibility  = Visibility.Collapsed;
-            TopSkewSlider.Visibility    = Visibility.Collapsed;
-            BottomSkewSlider.Visibility = Visibility.Collapsed;
+            for (int ch = 0; ch < 3; ch++)
+                _ramps[ch] = MonotoneSplineEvaluator.Evaluate(_nodePointsPerChannel[ch]);
         }
         DrawCurve();
     }
+
+    public List<NodePoint> GetNodePoints(int channel)
+        => _nodePointsPerChannel[channel].Select(p => p.Clone()).ToList();
+
+    public List<NodePoint> GetNodePoints()
+        => GetNodePoints(EditChannel);
 
     public void SetBezierMode(bool enable, List<BezierPoint>?[]? pointsPerChannel = null)
     {
         _isBezierMode = enable;
         if (enable)
         {
-            _isDrawMode = false;
+            _isNodeMode = false;
             if (pointsPerChannel != null)
             {
                 for (int ch = 0; ch < 3; ch++)
@@ -153,11 +149,6 @@ public partial class GammaCurveControl : UserControl
 
             for (int ch = 0; ch < 3; ch++)
                 _ramps[ch] = BezierEvaluator.Evaluate(_bezierPointsPerChannel[ch]);
-
-            LeftSkewSlider.Visibility   = Visibility.Collapsed;
-            RightSkewSlider.Visibility  = Visibility.Collapsed;
-            TopSkewSlider.Visibility    = Visibility.Collapsed;
-            BottomSkewSlider.Visibility = Visibility.Collapsed;
         }
         DrawCurve();
     }
@@ -176,117 +167,6 @@ public partial class GammaCurveControl : UserControl
 
     public List<BezierPoint> GetBezierPoints()
         => GetBezierPoints(EditChannel);
-
-    // ── Horizontal remapping ─────────────────────────────────────────────────
-
-    private ushort[] GetAppliedRamp(int ch)
-    {
-        var ramp = _ramps[ch];
-        if (_bottomSkewX <= 0 && _topSkewX >= 255) return ramp;
-
-        double from  = _bottomSkewX;
-        double range = _topSkewX - from;
-        if (range <= 0) return ramp;
-
-        ushort globalMin = ramp[0], globalMax = ramp[0];
-        for (int i = 0; i < 256; i++)
-        {
-            if (ramp[i] <= globalMin) globalMin = ramp[i];
-            if (ramp[i] > globalMax) globalMax = ramp[i];
-        }
-        int topAnchorIdx = 0;
-        for (int i = 0; i < 256; i++)
-        {
-            if (ramp[i] >= globalMax) { topAnchorIdx = i; break; }
-        }
-
-        var applied = new ushort[256];
-        for (int i = 0; i < 256; i++)
-        {
-            double t      = Math.Clamp((i - from) / range, 0.0, 1.0);
-            int    srcIdx = (int)Math.Round(t * 255.0);
-            applied[i] = ramp[Math.Clamp(srcIdx, 0, 255)];
-        }
-
-        for (int i = 0; i < 256; i++)
-        {
-            if (i < (int)Math.Round(from))
-                applied[i] = globalMin;
-            else if (i > (int)Math.Round(_topSkewX))
-                applied[i] = globalMax;
-        }
-
-        return applied;
-    }
-
-    // Legacy: returns the applied ramp for the edit channel
-    private ushort[] GetAppliedRamp() => GetAppliedRamp(EditChannel);
-
-    private void BakeHorizontalSkew()
-    {
-        if (_bottomSkewX <= 0 && _topSkewX >= 255) return;
-
-        // Bake all channels affected
-        if (_activeChannel < 0)
-        {
-            for (int ch = 0; ch < 3; ch++)
-                _ramps[ch] = GetAppliedRamp(ch);
-        }
-        else
-        {
-            _ramps[_activeChannel] = GetAppliedRamp(_activeChannel);
-        }
-
-        _topSkewX    = 255.0;
-        _bottomSkewX = 0.0;
-
-        _suppressSkewEvents = true;
-        var editRamp = _ramps[EditChannel];
-        LeftSkewSlider.Value   = editRamp[0];
-        RightSkewSlider.Value  = editRamp[255];
-        TopSkewSlider.Value    = 255;
-        BottomSkewSlider.Value = 0;
-        _suppressSkewEvents = false;
-    }
-
-    private void HSkew_DragCompleted(object sender, DragCompletedEventArgs e)
-    {
-        if (!_isDrawMode) return;
-        BakeHorizontalSkew();
-        DrawCurve();
-        FireDrawnRampChanged();
-    }
-
-    private void FireDrawnRampChanged()
-    {
-        if (_activeChannel < 0)
-        {
-            for (int ch = 0; ch < 3; ch++)
-                DrawnRampChanged?.Invoke(this, new DrawnRampChangedEventArgs
-                    { Channel = ch, Ramp = GetAppliedRamp(ch) });
-        }
-        else
-        {
-            DrawnRampChanged?.Invoke(this, new DrawnRampChangedEventArgs
-                { Channel = _activeChannel, Ramp = GetAppliedRamp(_activeChannel) });
-        }
-    }
-
-    private void TopSkewSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (!_isDrawMode || _suppressSkewEvents) return;
-        _topSkewX = Math.Max(e.NewValue, _bottomSkewX + 10);
-        DrawCurve();
-        FireDrawnRampChanged();
-    }
-
-    private void BottomSkewSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (!_isDrawMode || _suppressSkewEvents) return;
-        _bottomSkewX = Math.Min(e.NewValue, _topSkewX - 10);
-        DrawCurve();
-        FireDrawnRampChanged();
-    }
 
     // ── Curve rendering ───────────────────────────────────────────────────────
 
@@ -315,7 +195,7 @@ public partial class GammaCurveControl : UserControl
         var gridBrush     = new SolidColorBrush(Color.FromRgb(40, 40, 40));
         var identityBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70));
 
-        double pad = _isBezierMode ? BezierPadding : 0;
+        double pad = (_isBezierMode || _isNodeMode) ? BezierPadding : 0;
         double cLeft = pad, cTop = pad;
         double cW = w - 2 * pad, cH = h - 2 * pad;
 
@@ -326,7 +206,7 @@ public partial class GammaCurveControl : UserControl
             CurveCanvas.Children.Add(new Line { X1 = cLeft, Y1 = yg, X2 = cLeft + cW, Y2 = yg, Stroke = gridBrush, StrokeThickness = 1 });
         }
 
-        if (_isBezierMode)
+        if (_isBezierMode || _isNodeMode)
         {
             var borderBrush = new SolidColorBrush(Color.FromRgb(55, 55, 55));
             CurveCanvas.Children.Add(new System.Windows.Shapes.Rectangle
@@ -351,17 +231,15 @@ public partial class GammaCurveControl : UserControl
 
         if (allSame && _activeChannel < 0)
         {
-            // Single white/cyan/orange/green curve
             SolidColorBrush curveBrush;
             if (_isBezierMode) curveBrush = new SolidColorBrush(Color.FromRgb(0, 200, 80));
-            else if (_isDrawMode) curveBrush = new SolidColorBrush(Color.FromRgb(255, 165, 0));
+            else if (_isNodeMode) curveBrush = new SolidColorBrush(Color.FromRgb(255, 165, 0));
             else curveBrush = new SolidColorBrush(Colors.Cyan);
 
-            DrawChannelPolyline(cLeft, cTop, cW, cH, GetAppliedRamp(0), curveBrush, 1.5);
+            DrawChannelPolyline(cLeft, cTop, cW, cH, _ramps[0], curveBrush, 1.5);
         }
         else
         {
-            // Draw inactive channels first (dim, thin), then active on top
             int[] order;
             if (_activeChannel < 0)
                 order = [0, 1, 2];
@@ -379,32 +257,15 @@ public partial class GammaCurveControl : UserControl
                 bool isActive = _activeChannel < 0 || ch == _activeChannel;
                 var brush = isActive ? ChannelBrushes[ch] : ChannelBrushesDim[ch];
                 double thickness = isActive ? 1.5 : 1.0;
-                DrawChannelPolyline(cLeft, cTop, cW, cH, GetAppliedRamp(ch), brush, thickness);
+                DrawChannelPolyline(cLeft, cTop, cW, cH, _ramps[ch], brush, thickness);
             }
-        }
-
-        // Ghost base ramp when horizontal skew is active
-        if (_isDrawMode && (_bottomSkewX > 0 || _topSkewX < 255))
-        {
-            var ghostBrush = new SolidColorBrush(Color.FromArgb(60, 255, 165, 0));
-            var ghostLine = new Polyline
-            {
-                Stroke = ghostBrush, StrokeThickness = 1,
-                StrokeDashArray = new DoubleCollection { 2, 3 },
-                Points = new PointCollection()
-            };
-            var editRamp = _ramps[EditChannel];
-            for (int i = 0; i < 256; i++)
-            {
-                double x = cLeft + cW * i / 255.0;
-                double y = cTop + cH * (1.0 - editRamp[i] / 65280.0);
-                ghostLine.Points.Add(new Point(x, y));
-            }
-            CurveCanvas.Children.Add(ghostLine);
         }
 
         if (_isBezierMode)
             DrawBezierOverlay(w, h);
+
+        if (_isNodeMode)
+            DrawNodeOverlay(w, h);
     }
 
     private void DrawChannelPolyline(double cLeft, double cTop, double cW, double cH,
@@ -428,6 +289,205 @@ public partial class GammaCurveControl : UserControl
         return true;
     }
 
+    // ── Node overlay ──────────────────────────────────────────────────────────
+
+    private void DrawNodeOverlay(double w, double h)
+    {
+        int editCh = EditChannel;
+        var anchorBrush = ChannelBrushes.Length > editCh ? ChannelBrushes[editCh] : new SolidColorBrush(Color.FromRgb(255, 165, 0));
+        if (_activeChannel < 0)
+            anchorBrush = new SolidColorBrush(Color.FromRgb(255, 165, 0));
+
+        var pts = _nodePointsPerChannel[editCh];
+        foreach (var pt in pts)
+        {
+            double px = NormToPixelX(pt.X, w);
+            double py = NormToPixelY(pt.Y, h);
+
+            var circle = new Ellipse { Width = 10, Height = 10, Fill = anchorBrush };
+            Canvas.SetLeft(circle, px - 5);
+            Canvas.SetTop(circle, py - 5);
+            CurveCanvas.Children.Add(circle);
+        }
+    }
+
+    // ── Node mouse handling ───────────────────────────────────────────────────
+
+    private const double NodeHitRadius = 10.0;
+
+    private void NodeMouseDown(MouseButtonEventArgs e)
+    {
+        var pos = e.GetPosition(CurveCanvas);
+        double w = CurveCanvas.ActualWidth;
+        double h = CurveCanvas.ActualHeight;
+        if (w <= 0 || h <= 0) return;
+
+        var pts = _nodePointsPerChannel[EditChannel];
+
+        if (e.ChangedButton == MouseButton.Right)
+        {
+            // Right-click: delete node (not first/last)
+            for (int i = 1; i < pts.Count - 1; i++)
+            {
+                double px = NormToPixelX(pts[i].X, w);
+                double py = NormToPixelY(pts[i].Y, h);
+                if (Distance(pos, new Point(px, py)) < NodeHitRadius)
+                {
+                    pts.RemoveAt(i);
+                    if (_activeChannel < 0)
+                    {
+                        for (int ch = 0; ch < 3; ch++)
+                            if (ch != EditChannel)
+                                _nodePointsPerChannel[ch].RemoveAt(i);
+                    }
+                    NodeEvaluateAndNotify();
+                    return;
+                }
+            }
+            return;
+        }
+
+        if (e.ChangedButton != MouseButton.Left) return;
+
+        // Left-click: hit test existing nodes
+        for (int i = 0; i < pts.Count; i++)
+        {
+            double px = NormToPixelX(pts[i].X, w);
+            double py = NormToPixelY(pts[i].Y, h);
+            if (Distance(pos, new Point(px, py)) < NodeHitRadius)
+            {
+                _dragNodeIndex = i;
+                CurveCanvas.CaptureMouse();
+                return;
+            }
+        }
+
+        // Left-click empty: add new node
+        double newX = Math.Clamp(PixelToNormX(pos.X, w), 0.0, 1.0);
+        double newY = Math.Clamp(PixelToNormY(pos.Y, h), 0.0, 1.0);
+
+        int insertIdx = 0;
+        for (int i = 0; i < pts.Count; i++)
+            if (pts[i].X < newX) insertIdx = i + 1;
+
+        var newPt = new NodePoint { X = newX, Y = newY };
+        pts.Insert(insertIdx, newPt);
+
+        if (_activeChannel < 0)
+        {
+            for (int ch = 0; ch < 3; ch++)
+                if (ch != EditChannel)
+                    _nodePointsPerChannel[ch].Insert(insertIdx, newPt.Clone());
+        }
+
+        _dragNodeIndex = insertIdx;
+        CurveCanvas.CaptureMouse();
+        NodeEvaluateAndNotify();
+    }
+
+    private void NodeMouseMove(MouseEventArgs e)
+    {
+        if (_dragNodeIndex < 0) return;
+
+        var pos = e.GetPosition(CurveCanvas);
+        double w = CurveCanvas.ActualWidth;
+        double h = CurveCanvas.ActualHeight;
+        if (w <= 0 || h <= 0) return;
+
+        var pts = _nodePointsPerChannel[EditChannel];
+        var pt = pts[_dragNodeIndex];
+
+        double mx = Math.Clamp(PixelToNormX(pos.X, w), 0.0, 1.0);
+        double my = Math.Clamp(PixelToNormY(pos.Y, h), 0.0, 1.0);
+
+        bool isFirst = _dragNodeIndex == 0;
+        bool isLast = _dragNodeIndex == pts.Count - 1;
+
+        if (isFirst) mx = 0;
+        else if (isLast) mx = 1;
+        else
+        {
+            double minX = pts[_dragNodeIndex - 1].X + 0.001;
+            double maxX = pts[_dragNodeIndex + 1].X - 0.001;
+            mx = Math.Clamp(mx, minX, maxX);
+        }
+
+        pt.X = mx;
+        pt.Y = my;
+
+        if (_activeChannel < 0)
+        {
+            for (int ch = 0; ch < 3; ch++)
+            {
+                if (ch == EditChannel) continue;
+                var other = _nodePointsPerChannel[ch][_dragNodeIndex];
+                other.X = mx;
+                other.Y = my;
+            }
+        }
+
+        // Re-evaluate
+        if (_activeChannel < 0)
+        {
+            for (int ch = 0; ch < 3; ch++)
+            {
+                _ramps[ch] = MonotoneSplineEvaluator.Evaluate(_nodePointsPerChannel[ch]);
+                DrawnRampChanged?.Invoke(this, new DrawnRampChangedEventArgs { Channel = ch, Ramp = _ramps[ch] });
+            }
+        }
+        else
+        {
+            _ramps[EditChannel] = MonotoneSplineEvaluator.Evaluate(pts);
+            DrawnRampChanged?.Invoke(this, new DrawnRampChangedEventArgs { Channel = EditChannel, Ramp = _ramps[EditChannel] });
+        }
+
+        DrawCurve();
+    }
+
+    private void NodeMouseUp(MouseButtonEventArgs e)
+    {
+        if (_dragNodeIndex < 0) return;
+        _dragNodeIndex = -1;
+        CurveCanvas.ReleaseMouseCapture();
+
+        // Fire node points changed
+        if (_activeChannel < 0)
+        {
+            for (int ch = 0; ch < 3; ch++)
+                NodePointsChanged?.Invoke(this, new NodePointsChangedEventArgs
+                    { Channel = ch, Points = GetNodePoints(ch) });
+        }
+        else
+        {
+            NodePointsChanged?.Invoke(this, new NodePointsChangedEventArgs
+                { Channel = EditChannel, Points = GetNodePoints(EditChannel) });
+        }
+    }
+
+    private void NodeEvaluateAndNotify()
+    {
+        if (_activeChannel < 0)
+        {
+            for (int ch = 0; ch < 3; ch++)
+            {
+                _ramps[ch] = MonotoneSplineEvaluator.Evaluate(_nodePointsPerChannel[ch]);
+                DrawnRampChanged?.Invoke(this, new DrawnRampChangedEventArgs { Channel = ch, Ramp = _ramps[ch] });
+                NodePointsChanged?.Invoke(this, new NodePointsChangedEventArgs
+                    { Channel = ch, Points = GetNodePoints(ch) });
+            }
+        }
+        else
+        {
+            _ramps[EditChannel] = MonotoneSplineEvaluator.Evaluate(_nodePointsPerChannel[EditChannel]);
+            DrawnRampChanged?.Invoke(this, new DrawnRampChangedEventArgs { Channel = EditChannel, Ramp = _ramps[EditChannel] });
+            NodePointsChanged?.Invoke(this, new NodePointsChangedEventArgs
+                { Channel = EditChannel, Points = GetNodePoints(EditChannel) });
+        }
+        DrawCurve();
+    }
+
+    // ── Bezier overlay ────────────────────────────────────────────────────────
+
     private void DrawBezierOverlay(double w, double h)
     {
         var handleBrush = new SolidColorBrush(Color.FromRgb(200, 200, 200));
@@ -435,7 +495,6 @@ public partial class GammaCurveControl : UserControl
         int editCh = EditChannel;
         var anchorBrush = ChannelBrushes.Length > editCh ? ChannelBrushes[editCh] : new SolidColorBrush(Color.FromRgb(0, 200, 80));
 
-        // In "All" mode, use green accent
         if (_activeChannel < 0)
             anchorBrush = new SolidColorBrush(Color.FromRgb(0, 200, 80));
 
@@ -482,143 +541,24 @@ public partial class GammaCurveControl : UserControl
         }
     }
 
-    // ── Vertical skew sliders ─────────────────────────────────────────────────
-
-    private void LeftSkewSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (!_isDrawMode || _suppressSkewEvents) return;
-
-        double delta = e.NewValue - e.OldValue;
-        if (delta == 0) return;
-
-        void ApplyToChannel(int ch)
-        {
-            for (int i = 0; i < 256; i++)
-            {
-                double t = 1.0 - i / 255.0;
-                _ramps[ch][i] = (ushort)Math.Clamp(_ramps[ch][i] + delta * t, 0, 65280);
-            }
-        }
-
-        if (_activeChannel < 0)
-            for (int ch = 0; ch < 3; ch++) ApplyToChannel(ch);
-        else
-            ApplyToChannel(_activeChannel);
-
-        DrawCurve();
-        FireDrawnRampChanged();
-    }
-
-    private void RightSkewSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (!_isDrawMode || _suppressSkewEvents) return;
-
-        double delta = e.NewValue - e.OldValue;
-        if (delta == 0) return;
-
-        void ApplyToChannel(int ch)
-        {
-            for (int i = 0; i < 256; i++)
-            {
-                double t = i / 255.0;
-                _ramps[ch][i] = (ushort)Math.Clamp(_ramps[ch][i] + delta * t, 0, 65280);
-            }
-        }
-
-        if (_activeChannel < 0)
-            for (int ch = 0; ch < 3; ch++) ApplyToChannel(ch);
-        else
-            ApplyToChannel(_activeChannel);
-
-        DrawCurve();
-        FireDrawnRampChanged();
-    }
-
-    // ── Freehand drawing ──────────────────────────────────────────────────────
+    // ── Mouse dispatch ────────────────────────────────────────────────────────
 
     private void CurveCanvas_MouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (_isBezierMode)
-        {
-            BezierMouseDown(e);
-            return;
-        }
-        if (!_isDrawMode) return;
-        _isDrawing = true;
-        _lastDrawX = -1;
-        PaintAt(e.GetPosition(CurveCanvas));
-        CurveCanvas.CaptureMouse();
+        if (_isBezierMode) { BezierMouseDown(e); return; }
+        if (_isNodeMode) { NodeMouseDown(e); return; }
     }
 
     private void CurveCanvas_MouseMove(object sender, MouseEventArgs e)
     {
-        if (_isBezierMode)
-        {
-            BezierMouseMove(e);
-            return;
-        }
-        if (!_isDrawMode || !_isDrawing) return;
-        PaintAt(e.GetPosition(CurveCanvas));
+        if (_isBezierMode) { BezierMouseMove(e); return; }
+        if (_isNodeMode) { NodeMouseMove(e); return; }
     }
 
     private void CurveCanvas_MouseUp(object sender, MouseButtonEventArgs e)
     {
-        if (_isBezierMode)
-        {
-            BezierMouseUp(e);
-            return;
-        }
-        if (!_isDrawMode) return;
-        _isDrawing = false;
-        _lastDrawX = -1;
-        CurveCanvas.ReleaseMouseCapture();
-
-        _suppressSkewEvents = true;
-        var editRamp = _ramps[EditChannel];
-        LeftSkewSlider.Value  = editRamp[0];
-        RightSkewSlider.Value = editRamp[255];
-        _suppressSkewEvents = false;
-
-        FireDrawnRampChanged();
-    }
-
-    private void PaintAt(Point pos)
-    {
-        double w = CurveCanvas.ActualWidth;
-        double h = CurveCanvas.ActualHeight;
-        if (w <= 0 || h <= 0) return;
-
-        int    curX = (int)Math.Clamp(pos.X / w * 255.0, 0, 255);
-        ushort curY = (ushort)(Math.Clamp(1.0 - pos.Y / h, 0.0, 1.0) * 65280);
-
-        void PaintChannel(int ch)
-        {
-            if (_lastDrawX >= 0 && _lastDrawX != curX)
-            {
-                int fromX = _lastDrawX, toX = curX;
-                ushort fromY = _lastDrawY, toY = curY;
-                if (fromX > toX) { (fromX, toX) = (toX, fromX); (fromY, toY) = (toY, fromY); }
-
-                for (int ix = fromX; ix <= toX; ix++)
-                {
-                    double t = (double)(ix - fromX) / (toX - fromX);
-                    _ramps[ch][ix] = (ushort)Math.Clamp(fromY + t * (toY - fromY), 0, 65280);
-                }
-            }
-            else
-            {
-                _ramps[ch][curX] = curY;
-            }
-        }
-
-        if (_activeChannel < 0)
-            for (int ch = 0; ch < 3; ch++) PaintChannel(ch);
-        else
-            PaintChannel(_activeChannel);
-
-        _lastDrawX = curX;
-        _lastDrawY = curY;
-        DrawCurve();
+        if (_isBezierMode) { BezierMouseUp(e); return; }
+        if (_isNodeMode) { NodeMouseUp(e); return; }
     }
 
     // ── Bezier mouse handling ────────────────────────────────────────────────
@@ -632,7 +572,6 @@ public partial class GammaCurveControl : UserControl
     private double PixelToNormX(double px, double w) => (px - BezierPadding) / (w - 2 * BezierPadding);
     private double PixelToNormY(double py, double h) => ((h - BezierPadding) - py) / (h - 2 * BezierPadding);
 
-    // The bezier points used for interaction = the active edit channel's points
     private List<BezierPoint> ActiveBezierPoints => _bezierPointsPerChannel[EditChannel];
 
     private void BezierMouseDown(MouseButtonEventArgs e)
@@ -726,7 +665,6 @@ public partial class GammaCurveControl : UserControl
 
         pts.Insert(insertIdx, newPt);
 
-        // In All mode, mirror the addition to other channels
         if (_activeChannel < 0)
         {
             for (int ch = 0; ch < 3; ch++)
@@ -771,12 +709,9 @@ public partial class GammaCurveControl : UserControl
                     mx = Math.Clamp(mx, minX, maxX);
                 }
 
-                double dax = mx - pt.AnchorX;
-                double day = my - pt.AnchorY;
                 pt.AnchorX = mx;
                 pt.AnchorY = my;
 
-                // Mirror to other channels in All mode
                 if (_activeChannel < 0)
                 {
                     for (int ch = 0; ch < 3; ch++)
@@ -831,7 +766,6 @@ public partial class GammaCurveControl : UserControl
             }
         }
 
-        // Re-evaluate affected channels
         if (_activeChannel < 0)
         {
             for (int ch = 0; ch < 3; ch++)
@@ -844,7 +778,6 @@ public partial class GammaCurveControl : UserControl
 
         DrawCurve();
 
-        // Fire drawn ramp changed for affected channels
         if (_activeChannel < 0)
         {
             for (int ch = 0; ch < 3; ch++)
@@ -863,7 +796,6 @@ public partial class GammaCurveControl : UserControl
         _dragPointIndex = -1;
         CurveCanvas.ReleaseMouseCapture();
 
-        // Fire bezier points changed for affected channels
         if (_activeChannel < 0)
         {
             for (int ch = 0; ch < 3; ch++)

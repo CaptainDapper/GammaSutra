@@ -54,6 +54,18 @@ public partial class App
     {
         menu.Items.Clear();
 
+        // Per-monitor status
+        if (MainWindowInstance != null)
+        {
+            foreach (var dev in MainWindowInstance.MonitorDeviceNames)
+            {
+                var profileName = MainWindowInstance.MonitorProfileNames.TryGetValue(dev, out var n) && !string.IsNullOrEmpty(n) ? n : "(none)";
+                var shortName = dev.Replace(@"\\.\", "");
+                menu.Items.Add(new WpfMenuItem { Header = $"{shortName}: {profileName}", IsEnabled = false });
+            }
+            menu.Items.Add(new WpfSeparator());
+        }
+
         var showItem = new WpfMenuItem { Header = "Show" };
         showItem.Click += (_, _) => MainWindowInstance?.ShowWindow();
         menu.Items.Add(showItem);

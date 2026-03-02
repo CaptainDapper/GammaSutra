@@ -51,7 +51,7 @@
             <ToggleButton x:Name="SlidersModeButton" Grid.Column="8" Content="Sliders"
                           Margin="4,0,0,0" Padding="6,2" IsChecked="True"
                           Click="ModeButton_Click"/>
-            <ToggleButton x:Name="DrawModeButton" Grid.Column="9" Content="Draw"
+            <ToggleButton x:Name="NodeModeButton" Grid.Column="9" Content="Node"
                           Margin="2,0,0,0" Padding="6,2"
                           Click="ModeButton_Click"/>
             <ToggleButton x:Name="BezierModeButton" Grid.Column="10" Content="Bezier"
@@ -63,7 +63,8 @@
         <Border Grid.Row="1" BorderBrush="#555555" BorderThickness="1" Margin="0,0,0,6">
             <controls:GammaCurveControl x:Name="CurveControl"
                                         DrawnRampChanged="CurveControl_DrawnRampChanged"
-                                        BezierPointsChanged="CurveControl_BezierPointsChanged"/>
+                                        BezierPointsChanged="CurveControl_BezierPointsChanged"
+                                        NodePointsChanged="CurveControl_NodePointsChanged"/>
         </Border>
 
         <!-- Row 2: Parametric sliders — 2-column layout -->
