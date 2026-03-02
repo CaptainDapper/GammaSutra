@@ -326,7 +326,6 @@ public partial class MainWindow : Window
 
         var vis = enabled ? Visibility.Visible : Visibility.Collapsed;
         SlidersGrid.Visibility = vis;
-        PosterizeExpander.Visibility = vis;
     }
 
     private void CurveControl_DrawnRampChanged(object sender, DrawnRampChangedEventArgs args)
