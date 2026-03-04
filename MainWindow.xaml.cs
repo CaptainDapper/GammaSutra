@@ -17,7 +17,6 @@ public partial class MainWindow : Window
     private readonly List<string> _monitorDeviceNames = new();
     private bool _suppressEvents = false;
     private bool _isNodeMode = false;
-    private bool _isBezierMode = false;
     private bool _isInitialized = false;
     private int _activeChannel = -1; // -1 = All, 0 = R, 1 = G, 2 = B
 
@@ -60,6 +59,8 @@ public partial class MainWindow : Window
             MonitorComboBox.Items.Add(screen.DeviceName);
             if (!_monitorSettings.ContainsKey(screen.DeviceName))
                 _monitorSettings[screen.DeviceName] = new MonitorSettings { DeviceName = screen.DeviceName };
+            if (!_monitorProfileNames.ContainsKey(screen.DeviceName))
+                _monitorProfileNames[screen.DeviceName] = ProfileService.DefaultProfileName;
         }
         if (MonitorComboBox.Items.Count > 0)
             MonitorComboBox.SelectedIndex = 0;
@@ -177,7 +178,7 @@ public partial class MainWindow : Window
 
     private void Slider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (!_isInitialized || _suppressEvents || _isNodeMode || _isBezierMode) return;
+        if (!_isInitialized || _suppressEvents || _isNodeMode) return;
 
         GammaLabel.Text      = GammaSlider.Value.ToString("F2");
         BrightnessLabel.Text = BrightnessSlider.Value.ToString("F2");
@@ -231,20 +232,18 @@ public partial class MainWindow : Window
         MarkDirty();
     }
 
-    // ── Mode switching (Sliders / Draw / Bezier) ────────────────────────────
+    // ── Mode switching (Sliders / Node) ──────────────────────────────────────
 
     private void ModeButton_Click(object sender, RoutedEventArgs e)
     {
         // Radio-style: prevent unchecking the active button
-        if (sender == SlidersModeButton && _isNodeMode == false && _isBezierMode == false)
+        if (sender == SlidersModeButton && _isNodeMode == false)
             { SlidersModeButton.IsChecked = true; return; }
         if (sender == NodeModeButton && _isNodeMode)
             { NodeModeButton.IsChecked = true; return; }
-        if (sender == BezierModeButton && _isBezierMode)
-            { BezierModeButton.IsChecked = true; return; }
 
         // Determine which mode was clicked
-        int newMode = sender == NodeModeButton ? 1 : sender == BezierModeButton ? 2 : 0;
+        int newMode = sender == NodeModeButton ? 1 : 0;
 
         // Exit current mode
         if (_isNodeMode)
@@ -252,16 +251,10 @@ public partial class MainWindow : Window
             _isNodeMode = false;
             CurveControl.SetNodeMode(false);
         }
-        if (_isBezierMode)
-        {
-            _isBezierMode = false;
-            CurveControl.SetBezierMode(false);
-        }
 
         // Update toggle states
         SlidersModeButton.IsChecked = newMode == 0;
         NodeModeButton.IsChecked    = newMode == 1;
-        BezierModeButton.IsChecked  = newMode == 2;
 
         var s = CurrentSettings;
 
@@ -301,37 +294,7 @@ public partial class MainWindow : Window
                     CurveControl.SetNodeMode(true);
                 }
                 break;
-
-            case 2: // Bezier
-                SetSlidersEnabled(false);
-                _isBezierMode = true;
-                if (s != null)
-                {
-                    s.CurveMode = 2;
-                    CurveControl.SetBezierMode(true, s.BezierPoints);
-                    for (int ch = 0; ch < 3; ch++)
-                    {
-                        s.DrawnRamp[ch] = BezierEvaluator.Evaluate(
-                            s.BezierPoints[ch] ?? BezierEvaluator.DefaultPoints());
-                        s.UseDrawnCurve[ch] = true;
-                        s.BezierPoints[ch] ??= CurveControl.GetBezierPoints(ch);
-                    }
-                    ApplyCurrentToMonitor();
-                }
-                else
-                {
-                    CurveControl.SetBezierMode(true);
-                }
-                break;
         }
-    }
-
-    private void CurveControl_BezierPointsChanged(object sender, BezierPointsChangedEventArgs args)
-    {
-        var s = CurrentSettings;
-        if (s == null) return;
-        s.BezierPoints[args.Channel] = args.Points;
-        MarkDirty();
     }
 
     private void CurveControl_NodePointsChanged(object sender, NodePointsChangedEventArgs args)
@@ -410,14 +373,8 @@ public partial class MainWindow : Window
             _isNodeMode = false;
             CurveControl.SetNodeMode(false);
         }
-        if (_isBezierMode)
-        {
-            _isBezierMode = false;
-            CurveControl.SetBezierMode(false);
-        }
         SlidersModeButton.IsChecked = true;
         NodeModeButton.IsChecked = false;
-        BezierModeButton.IsChecked = false;
         SetSlidersEnabled(true);
 
         var s = CurrentSettings;
@@ -430,7 +387,6 @@ public partial class MainWindow : Window
                 s.SCurve[ch] = 0.0; s.Highlights[ch] = 0.0; s.Shadows[ch] = 0.0;
                 s.UseDrawnCurve[ch] = false;
                 s.DrawnRamp[ch] = null;
-                s.BezierPoints[ch] = null;
                 s.NodePoints[ch] = null;
                 s.PosterizeSteps[ch] = 0;
                 s.PosterizeRangeMin[ch] = 0.0;
@@ -541,26 +497,18 @@ public partial class MainWindow : Window
             _isNodeMode = false;
             CurveControl.SetNodeMode(false);
         }
-        if (_isBezierMode)
-        {
-            _isBezierMode = false;
-            CurveControl.SetBezierMode(false);
-        }
 
         var cs = CurrentSettings;
         int mode = cs?.CurveMode ?? 0;
 
+        // Treat legacy Bezier (mode 2) as Sliders
+        if (mode == 2) mode = 0;
+
         SlidersModeButton.IsChecked = mode == 0;
         NodeModeButton.IsChecked    = mode == 1;
-        BezierModeButton.IsChecked  = mode == 2;
 
         switch (mode)
         {
-            case 2: // Bezier
-                _isBezierMode = true;
-                SetSlidersEnabled(false);
-                CurveControl.SetBezierMode(true, cs!.BezierPoints);
-                break;
             case 1: // Node
                 _isNodeMode = true;
                 SetSlidersEnabled(false);

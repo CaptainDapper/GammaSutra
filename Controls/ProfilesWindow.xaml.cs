@@ -79,7 +79,7 @@ public partial class ProfilesWindow : Window
         };
         deleteBtn.Click += (_, _) => DeleteProfile(profile);
         if (profile.Name == ProfileService.DefaultProfileName)
-            deleteBtn.Visibility = Visibility.Collapsed;
+            deleteBtn.Visibility = Visibility.Hidden;
 
         Grid.SetColumn(nameBlock,  0);
         Grid.SetColumn(hotkeyBlock, 1);

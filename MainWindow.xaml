@@ -16,12 +16,11 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- Row 0: Monitor selector + channel buttons + Draw/Bezier -->
+        <!-- Row 0: Monitor selector + channel buttons + mode toggle -->
         <Grid Grid.Row="0" Margin="0,0,0,6">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
@@ -55,16 +54,12 @@
             <ToggleButton x:Name="NodeModeButton" Grid.Column="9" Content="Node"
                           Margin="2,0,0,0" Padding="6,2"
                           Click="ModeButton_Click"/>
-            <ToggleButton x:Name="BezierModeButton" Grid.Column="10" Content="Bezier"
-                          Margin="2,0,0,0" Padding="6,2"
-                          Click="ModeButton_Click"/>
         </Grid>
 
         <!-- Row 1: Curve graph -->
         <Border Grid.Row="1" BorderBrush="#555555" BorderThickness="1" Margin="0,0,0,6">
             <controls:GammaCurveControl x:Name="CurveControl"
                                         DrawnRampChanged="CurveControl_DrawnRampChanged"
-                                        BezierPointsChanged="CurveControl_BezierPointsChanged"
                                         NodePointsChanged="CurveControl_NodePointsChanged"/>
         </Border>
 

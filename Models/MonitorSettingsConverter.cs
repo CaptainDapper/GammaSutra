@@ -21,7 +21,11 @@ public class MonitorSettingsConverter : JsonConverter<MonitorSettings>
             switch (prop)
             {
                 case "DeviceName":    s.DeviceName = reader.GetString() ?? string.Empty; break;
-                case "CurveMode":     s.CurveMode = reader.GetInt32(); break;
+                case "CurveMode":
+                    s.CurveMode = reader.GetInt32();
+                    // Treat legacy Bezier (mode 2) as Normal
+                    if (s.CurveMode == 2) s.CurveMode = 0;
+                    break;
                 case "Gamma":         s.Gamma = ReadDoubleArrayOrScalar(ref reader, 1.0); break;
                 case "Brightness":    s.Brightness = ReadDoubleArrayOrScalar(ref reader, 0.0); break;
                 case "Contrast":      s.Contrast = ReadDoubleArrayOrScalar(ref reader, 1.0); break;
@@ -30,7 +34,7 @@ public class MonitorSettingsConverter : JsonConverter<MonitorSettings>
                 case "Shadows":       s.Shadows = ReadDoubleArrayOrScalar(ref reader, 0.0); break;
                 case "UseDrawnCurve": s.UseDrawnCurve = ReadBoolArrayOrScalar(ref reader); break;
                 case "DrawnRamp":     s.DrawnRamp = ReadUshortArrayArrayOrSingle(ref reader); break;
-                case "BezierPoints":  s.BezierPoints = ReadBezierArrayOrSingle(ref reader, options); break;
+                case "BezierPoints":  reader.Skip(); break; // Legacy field, ignored
                 case "NodePoints":   s.NodePoints = ReadNodePointsArray(ref reader, options); break;
                 case "PosterizeSteps":       s.PosterizeSteps = ReadIntArrayOrScalar(ref reader, 0); break;
                 case "PosterizeRangeMin":    s.PosterizeRangeMin = ReadDoubleArrayOrScalar(ref reader, 0.0); break;
@@ -87,18 +91,6 @@ public class MonitorSettingsConverter : JsonConverter<MonitorSettings>
                 writer.WriteNullValue();
             else
                 JsonSerializer.Serialize(writer, value.NodePoints[ch], options);
-        }
-        writer.WriteEndArray();
-
-        // BezierPoints
-        writer.WritePropertyName("BezierPoints");
-        writer.WriteStartArray();
-        for (int ch = 0; ch < 3; ch++)
-        {
-            if (value.BezierPoints[ch] == null)
-                writer.WriteNullValue();
-            else
-                JsonSerializer.Serialize(writer, value.BezierPoints[ch], options);
         }
         writer.WriteEndArray();
 
@@ -180,41 +172,6 @@ public class MonitorSettingsConverter : JsonConverter<MonitorSettings>
             }
             // Read past EndArray
             reader.Read();
-            return result;
-        }
-
-        return [null, null, null];
-    }
-
-    private static List<BezierPoint>?[] ReadBezierArrayOrSingle(ref Utf8JsonReader reader, JsonSerializerOptions options)
-    {
-        if (reader.TokenType == JsonTokenType.Null) return [null, null, null];
-
-        if (reader.TokenType == JsonTokenType.StartArray)
-        {
-            // Use a JsonDocument to inspect the structure
-            using var doc = JsonDocument.ParseValue(ref reader);
-            var arr = doc.RootElement;
-
-            if (arr.GetArrayLength() == 0) return [null, null, null];
-
-            // Check first element: if it's an object with AnchorX, it's old format (single list of BezierPoints)
-            var first = arr[0];
-            if (first.ValueKind == JsonValueKind.Object && first.TryGetProperty("AnchorX", out _))
-            {
-                var pts = JsonSerializer.Deserialize<List<BezierPoint>>(arr.GetRawText(), options);
-                return [pts, pts?.Select(p => p.Clone()).ToList(), pts?.Select(p => p.Clone()).ToList()];
-            }
-
-            // New format: array of 3 elements
-            var result = new List<BezierPoint>?[3];
-            for (int ch = 0; ch < 3 && ch < arr.GetArrayLength(); ch++)
-            {
-                if (arr[ch].ValueKind == JsonValueKind.Null)
-                    result[ch] = null;
-                else
-                    result[ch] = JsonSerializer.Deserialize<List<BezierPoint>>(arr[ch].GetRawText(), options);
-            }
             return result;
         }
 

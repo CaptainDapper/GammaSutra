@@ -17,12 +17,6 @@ public class DrawnRampChangedEventArgs : EventArgs
     public ushort[] Ramp { get; init; } = null!;
 }
 
-public class BezierPointsChangedEventArgs : EventArgs
-{
-    public int Channel { get; init; }
-    public List<BezierPoint> Points { get; init; } = null!;
-}
-
 public class NodePointsChangedEventArgs : EventArgs
 {
     public int Channel { get; init; }
@@ -53,21 +47,9 @@ public partial class GammaCurveControl : UserControl
         MonotoneSplineEvaluator.DefaultPoints()
     ];
     private int _dragNodeIndex = -1;
-
-    // Bezier mode state (per-channel)
-    private bool _isBezierMode = false;
-    private List<BezierPoint>[] _bezierPointsPerChannel =
-    [
-        BezierEvaluator.DefaultPoints(),
-        BezierEvaluator.DefaultPoints(),
-        BezierEvaluator.DefaultPoints()
-    ];
-    private enum BezierDragTarget { None, Anchor, HandleIn, HandleOut }
-    private BezierDragTarget _dragTarget = BezierDragTarget.None;
-    private int _dragPointIndex = -1;
+    private NodePoint[]? _dragOriginalPositions; // snapshot of all channels at drag start
 
     public event EventHandler<DrawnRampChangedEventArgs>? DrawnRampChanged;
-    public event EventHandler<BezierPointsChangedEventArgs>? BezierPointsChanged;
     public event EventHandler<NodePointsChangedEventArgs>? NodePointsChanged;
 
     public int ActiveChannel
@@ -76,7 +58,7 @@ public partial class GammaCurveControl : UserControl
         set { _activeChannel = value; DrawCurve(); }
     }
 
-    // The channel index used for node/bezier interaction
+    // The channel index used for node interaction
     private int EditChannel => _activeChannel < 0 ? 0 : _activeChannel;
 
     public GammaCurveControl()
@@ -88,6 +70,7 @@ public partial class GammaCurveControl : UserControl
                 _ramps[ch][i] = (ushort)(i * 256);
 
         CurveCanvas.SizeChanged += (_, _) => DrawCurve();
+        CurveCanvas.LostMouseCapture += CurveCanvas_LostMouseCapture;
         Loaded += (_, _) => DrawCurve();
     }
 
@@ -179,7 +162,6 @@ public partial class GammaCurveControl : UserControl
         _isNodeMode = enable;
         if (enable)
         {
-            _isBezierMode = false;
             if (pointsPerChannel != null)
             {
                 for (int ch = 0; ch < 3; ch++)
@@ -202,44 +184,6 @@ public partial class GammaCurveControl : UserControl
 
     public List<NodePoint> GetNodePoints()
         => GetNodePoints(EditChannel);
-
-    public void SetBezierMode(bool enable, List<BezierPoint>?[]? pointsPerChannel = null)
-    {
-        _isBezierMode = enable;
-        if (enable)
-        {
-            _isNodeMode = false;
-            if (pointsPerChannel != null)
-            {
-                for (int ch = 0; ch < 3; ch++)
-                {
-                    if (pointsPerChannel[ch] != null)
-                        _bezierPointsPerChannel[ch] = pointsPerChannel[ch]!.Select(p => p.Clone()).ToList();
-                    else
-                        _bezierPointsPerChannel[ch] = BezierEvaluator.DefaultPoints();
-                }
-            }
-
-            for (int ch = 0; ch < 3; ch++)
-                _ramps[ch] = BezierEvaluator.Evaluate(_bezierPointsPerChannel[ch]);
-        }
-        DrawCurve();
-    }
-
-    // Overload for backward compat (single list of points)
-    public void SetBezierMode(bool enable, List<BezierPoint>? points)
-    {
-        if (points != null)
-            SetBezierMode(enable, [points, points.Select(p => p.Clone()).ToList(), points.Select(p => p.Clone()).ToList()]);
-        else
-            SetBezierMode(enable, (List<BezierPoint>?[]?)null);
-    }
-
-    public List<BezierPoint> GetBezierPoints(int channel)
-        => _bezierPointsPerChannel[channel].Select(p => p.Clone()).ToList();
-
-    public List<BezierPoint> GetBezierPoints()
-        => GetBezierPoints(EditChannel);
 
     // ── Curve rendering ───────────────────────────────────────────────────────
 
@@ -268,7 +212,7 @@ public partial class GammaCurveControl : UserControl
         var gridBrush     = new SolidColorBrush(Color.FromRgb(40, 40, 40));
         var identityBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70));
 
-        double pad = (_isBezierMode || _isNodeMode) ? BezierPadding : 0;
+        double pad = CurvePadding;
         double cLeft = pad, cTop = pad;
         double cW = w - 2 * pad, cH = h - 2 * pad;
 
@@ -279,7 +223,6 @@ public partial class GammaCurveControl : UserControl
             CurveCanvas.Children.Add(new Line { X1 = cLeft, Y1 = yg, X2 = cLeft + cW, Y2 = yg, Stroke = gridBrush, StrokeThickness = 1 });
         }
 
-        if (_isBezierMode || _isNodeMode)
         {
             var borderBrush = new SolidColorBrush(Color.FromRgb(55, 55, 55));
             CurveCanvas.Children.Add(new System.Windows.Shapes.Rectangle
@@ -305,8 +248,7 @@ public partial class GammaCurveControl : UserControl
         if (allSame && _activeChannel < 0)
         {
             SolidColorBrush curveBrush;
-            if (_isBezierMode) curveBrush = new SolidColorBrush(Color.FromRgb(0, 200, 80));
-            else if (_isNodeMode) curveBrush = new SolidColorBrush(Color.FromRgb(255, 165, 0));
+            if (_isNodeMode) curveBrush = new SolidColorBrush(Color.FromRgb(255, 165, 0));
             else curveBrush = new SolidColorBrush(Colors.Cyan);
 
             DrawChannelPolyline(cLeft, cTop, cW, cH, _ramps[0], curveBrush, 1.5);
@@ -333,9 +275,6 @@ public partial class GammaCurveControl : UserControl
                 DrawChannelPolyline(cLeft, cTop, cW, cH, _ramps[ch], brush, thickness);
             }
         }
-
-        if (_isBezierMode)
-            DrawBezierOverlay(w, h);
 
         if (_isNodeMode)
             DrawNodeOverlay(w, h);
@@ -430,6 +369,7 @@ public partial class GammaCurveControl : UserControl
             if (Distance(pos, new Point(px, py)) < NodeHitRadius)
             {
                 _dragNodeIndex = i;
+                SnapshotDragOrigin();
                 CurveCanvas.CaptureMouse();
                 return;
             }
@@ -521,6 +461,7 @@ public partial class GammaCurveControl : UserControl
     {
         if (_dragNodeIndex < 0) return;
         _dragNodeIndex = -1;
+        _dragOriginalPositions = null;
         CurveCanvas.ReleaseMouseCapture();
 
         // Fire node points changed
@@ -559,59 +500,52 @@ public partial class GammaCurveControl : UserControl
         DrawCurve();
     }
 
-    // ── Bezier overlay ────────────────────────────────────────────────────────
-
-    private void DrawBezierOverlay(double w, double h)
+    private void SnapshotDragOrigin()
     {
-        var handleBrush = new SolidColorBrush(Color.FromRgb(200, 200, 200));
-        var handleLineBrush = new SolidColorBrush(Color.FromArgb(120, 200, 200, 200));
-        int editCh = EditChannel;
-        var anchorBrush = ChannelBrushes.Length > editCh ? ChannelBrushes[editCh] : new SolidColorBrush(Color.FromRgb(0, 200, 80));
+        _dragOriginalPositions = new NodePoint[3];
+        for (int ch = 0; ch < 3; ch++)
+            _dragOriginalPositions[ch] = _nodePointsPerChannel[ch][_dragNodeIndex].Clone();
+    }
 
-        if (_activeChannel < 0)
-            anchorBrush = new SolidColorBrush(Color.FromRgb(0, 200, 80));
+    private void CancelNodeDrag()
+    {
+        if (_dragNodeIndex < 0 || _dragOriginalPositions == null) return;
 
-        var pts = _bezierPointsPerChannel[editCh];
-        foreach (var pt in pts)
+        int idx = _dragNodeIndex;
+        var orig = _dragOriginalPositions;
+        _dragNodeIndex = -1;
+        _dragOriginalPositions = null;
+
+        // Restore original positions
+        for (int ch = 0; ch < 3; ch++)
         {
-            double ax = NormToPixelX(pt.AnchorX, w);
-            double ay = NormToPixelY(pt.AnchorY, h);
-
-            if (pt.HandleInDX != 0 || pt.HandleInDY != 0)
-            {
-                double hx = NormToPixelX(pt.AnchorX + pt.HandleInDX, w);
-                double hy = NormToPixelY(pt.AnchorY + pt.HandleInDY, h);
-                CurveCanvas.Children.Add(new Line
-                {
-                    X1 = ax, Y1 = ay, X2 = hx, Y2 = hy,
-                    Stroke = handleLineBrush, StrokeThickness = 1
-                });
-                var hCircle = new Ellipse { Width = 8, Height = 8, Fill = handleBrush };
-                Canvas.SetLeft(hCircle, hx - 4);
-                Canvas.SetTop(hCircle, hy - 4);
-                CurveCanvas.Children.Add(hCircle);
-            }
-
-            if (pt.HandleOutDX != 0 || pt.HandleOutDY != 0)
-            {
-                double hx = NormToPixelX(pt.AnchorX + pt.HandleOutDX, w);
-                double hy = NormToPixelY(pt.AnchorY + pt.HandleOutDY, h);
-                CurveCanvas.Children.Add(new Line
-                {
-                    X1 = ax, Y1 = ay, X2 = hx, Y2 = hy,
-                    Stroke = handleLineBrush, StrokeThickness = 1
-                });
-                var hCircle = new Ellipse { Width = 8, Height = 8, Fill = handleBrush };
-                Canvas.SetLeft(hCircle, hx - 4);
-                Canvas.SetTop(hCircle, hy - 4);
-                CurveCanvas.Children.Add(hCircle);
-            }
-
-            var anchor = new Ellipse { Width = 10, Height = 10, Fill = anchorBrush };
-            Canvas.SetLeft(anchor, ax - 5);
-            Canvas.SetTop(anchor, ay - 5);
-            CurveCanvas.Children.Add(anchor);
+            var pt = _nodePointsPerChannel[ch][idx];
+            pt.X = orig[ch].X;
+            pt.Y = orig[ch].Y;
         }
+
+        CurveCanvas.ReleaseMouseCapture();
+
+        // Re-evaluate with restored positions
+        NodeEvaluateAndNotify();
+    }
+
+    private void CurveCanvas_LostMouseCapture(object sender, MouseEventArgs e)
+    {
+        if (_dragNodeIndex >= 0)
+            CancelNodeDrag();
+        _isPanning = false;
+    }
+
+    protected override void OnPreviewKeyDown(System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape && _dragNodeIndex >= 0)
+        {
+            CancelNodeDrag();
+            e.Handled = true;
+            return;
+        }
+        base.OnPreviewKeyDown(e);
     }
 
     // ── Mouse dispatch ────────────────────────────────────────────────────────
@@ -627,7 +561,6 @@ public partial class GammaCurveControl : UserControl
             e.Handled = true;
             return;
         }
-        if (_isBezierMode) { BezierMouseDown(e); return; }
         if (_isNodeMode) { NodeMouseDown(e); return; }
     }
 
@@ -643,7 +576,6 @@ public partial class GammaCurveControl : UserControl
             e.Handled = true;
             return;
         }
-        if (_isBezierMode) { BezierMouseMove(e); return; }
         if (_isNodeMode) { NodeMouseMove(e); return; }
     }
 
@@ -656,279 +588,18 @@ public partial class GammaCurveControl : UserControl
             e.Handled = true;
             return;
         }
-        if (_isBezierMode) { BezierMouseUp(e); return; }
         if (_isNodeMode) { NodeMouseUp(e); return; }
     }
 
-    // ── Bezier mouse handling ────────────────────────────────────────────────
+    // ── Coordinate helpers ───────────────────────────────────────────────────
 
-    private const double MaxHandleLength = 1.0;
     private const double HitRadius = 10.0;
-    private const double BezierPadding = 30.0;
+    private const double CurvePadding = 30.0;
 
-    private double NormToPixelX(double nx, double w) => BezierPadding + nx * (w - 2 * BezierPadding);
-    private double NormToPixelY(double ny, double h) => (h - BezierPadding) - ny * (h - 2 * BezierPadding);
-    private double PixelToNormX(double px, double w) => (px - BezierPadding) / (w - 2 * BezierPadding);
-    private double PixelToNormY(double py, double h) => ((h - BezierPadding) - py) / (h - 2 * BezierPadding);
-
-    private List<BezierPoint> ActiveBezierPoints => _bezierPointsPerChannel[EditChannel];
-
-    private void BezierMouseDown(MouseButtonEventArgs e)
-    {
-        var pos = e.GetPosition(CurveCanvas);
-        double w = CurveCanvas.ActualWidth;
-        double h = CurveCanvas.ActualHeight;
-        if (w <= 0 || h <= 0) return;
-
-        var pts = ActiveBezierPoints;
-
-        if (e.ChangedButton == MouseButton.Right)
-        {
-            for (int i = 1; i < pts.Count - 1; i++)
-            {
-                double ax = NormToPixelX(pts[i].AnchorX, w);
-                double ay = NormToPixelY(pts[i].AnchorY, h);
-                if (Distance(pos, new Point(ax, ay)) < HitRadius)
-                {
-                    pts.RemoveAt(i);
-                    EvaluateAndNotify();
-                    return;
-                }
-            }
-            return;
-        }
-
-        if (e.ChangedButton != MouseButton.Left) return;
-
-        for (int i = 0; i < pts.Count; i++)
-        {
-            var pt = pts[i];
-            double ax = NormToPixelX(pt.AnchorX, w);
-            double ay = NormToPixelY(pt.AnchorY, h);
-
-            if (pt.HandleInDX != 0 || pt.HandleInDY != 0)
-            {
-                double hx = NormToPixelX(pt.AnchorX + pt.HandleInDX, w);
-                double hy = NormToPixelY(pt.AnchorY + pt.HandleInDY, h);
-                if (Distance(pos, new Point(hx, hy)) < HitRadius)
-                {
-                    _dragTarget = BezierDragTarget.HandleIn;
-                    _dragPointIndex = i;
-                    CurveCanvas.CaptureMouse();
-                    return;
-                }
-            }
-
-            if (pt.HandleOutDX != 0 || pt.HandleOutDY != 0)
-            {
-                double hx = NormToPixelX(pt.AnchorX + pt.HandleOutDX, w);
-                double hy = NormToPixelY(pt.AnchorY + pt.HandleOutDY, h);
-                if (Distance(pos, new Point(hx, hy)) < HitRadius)
-                {
-                    _dragTarget = BezierDragTarget.HandleOut;
-                    _dragPointIndex = i;
-                    CurveCanvas.CaptureMouse();
-                    return;
-                }
-            }
-
-            if (Distance(pos, new Point(ax, ay)) < HitRadius)
-            {
-                _dragTarget = BezierDragTarget.Anchor;
-                _dragPointIndex = i;
-                CurveCanvas.CaptureMouse();
-                return;
-            }
-        }
-
-        double newX = Math.Clamp(PixelToNormX(pos.X, w), 0.0, 1.0);
-        double newY = Math.Clamp(PixelToNormY(pos.Y, h), 0.0, 1.0);
-
-        int insertIdx = 0;
-        for (int i = 0; i < pts.Count; i++)
-        {
-            if (pts[i].AnchorX < newX)
-                insertIdx = i + 1;
-        }
-
-        double handleLen = 0.1;
-        if (insertIdx > 0 && insertIdx < pts.Count)
-            handleLen = (pts[insertIdx].AnchorX - pts[insertIdx - 1].AnchorX) / 3.0;
-
-        var newPt = new BezierPoint
-        {
-            AnchorX = newX, AnchorY = newY,
-            HandleInDX = -handleLen, HandleInDY = 0,
-            HandleOutDX = handleLen, HandleOutDY = 0,
-        };
-
-        pts.Insert(insertIdx, newPt);
-
-        if (_activeChannel < 0)
-        {
-            for (int ch = 0; ch < 3; ch++)
-            {
-                if (ch == EditChannel) continue;
-                _bezierPointsPerChannel[ch].Insert(insertIdx, newPt.Clone());
-            }
-        }
-
-        EvaluateAndNotify();
-    }
-
-    private void BezierMouseMove(MouseEventArgs e)
-    {
-        if (_dragTarget == BezierDragTarget.None) return;
-
-        var pos = e.GetPosition(CurveCanvas);
-        double w = CurveCanvas.ActualWidth;
-        double h = CurveCanvas.ActualHeight;
-        if (w <= 0 || h <= 0) return;
-
-        var pts = ActiveBezierPoints;
-        var pt = pts[_dragPointIndex];
-        double mx = PixelToNormX(pos.X, w);
-        double my = PixelToNormY(pos.Y, h);
-
-        bool isFirst = _dragPointIndex == 0;
-        bool isLast  = _dragPointIndex == pts.Count - 1;
-
-        switch (_dragTarget)
-        {
-            case BezierDragTarget.Anchor:
-            {
-                mx = Math.Clamp(mx, 0.0, 1.0);
-                my = Math.Clamp(my, 0.0, 1.0);
-                if (isFirst) mx = 0;
-                else if (isLast) mx = 1;
-                else
-                {
-                    double minX = pts[_dragPointIndex - 1].AnchorX + 0.001;
-                    double maxX = pts[_dragPointIndex + 1].AnchorX - 0.001;
-                    mx = Math.Clamp(mx, minX, maxX);
-                }
-
-                pt.AnchorX = mx;
-                pt.AnchorY = my;
-
-                if (_activeChannel < 0)
-                {
-                    for (int ch = 0; ch < 3; ch++)
-                    {
-                        if (ch == EditChannel) continue;
-                        var other = _bezierPointsPerChannel[ch][_dragPointIndex];
-                        other.AnchorX = mx;
-                        other.AnchorY = my;
-                    }
-                }
-                break;
-            }
-            case BezierDragTarget.HandleIn:
-            {
-                double dx = mx - pt.AnchorX;
-                double dy = my - pt.AnchorY;
-                double len = Math.Sqrt(dx * dx + dy * dy);
-                if (len > MaxHandleLength) { dx *= MaxHandleLength / len; dy *= MaxHandleLength / len; }
-                pt.HandleInDX = dx;
-                pt.HandleInDY = dy;
-                if (_activeChannel < 0)
-                {
-                    for (int ch = 0; ch < 3; ch++)
-                    {
-                        if (ch == EditChannel) continue;
-                        var other = _bezierPointsPerChannel[ch][_dragPointIndex];
-                        other.HandleInDX = dx;
-                        other.HandleInDY = dy;
-                    }
-                }
-                break;
-            }
-            case BezierDragTarget.HandleOut:
-            {
-                double dx = mx - pt.AnchorX;
-                double dy = my - pt.AnchorY;
-                double len = Math.Sqrt(dx * dx + dy * dy);
-                if (len > MaxHandleLength) { dx *= MaxHandleLength / len; dy *= MaxHandleLength / len; }
-                pt.HandleOutDX = dx;
-                pt.HandleOutDY = dy;
-                if (_activeChannel < 0)
-                {
-                    for (int ch = 0; ch < 3; ch++)
-                    {
-                        if (ch == EditChannel) continue;
-                        var other = _bezierPointsPerChannel[ch][_dragPointIndex];
-                        other.HandleOutDX = dx;
-                        other.HandleOutDY = dy;
-                    }
-                }
-                break;
-            }
-        }
-
-        if (_activeChannel < 0)
-        {
-            for (int ch = 0; ch < 3; ch++)
-                _ramps[ch] = BezierEvaluator.Evaluate(_bezierPointsPerChannel[ch]);
-        }
-        else
-        {
-            _ramps[EditChannel] = BezierEvaluator.Evaluate(ActiveBezierPoints);
-        }
-
-        DrawCurve();
-
-        if (_activeChannel < 0)
-        {
-            for (int ch = 0; ch < 3; ch++)
-                DrawnRampChanged?.Invoke(this, new DrawnRampChangedEventArgs { Channel = ch, Ramp = _ramps[ch] });
-        }
-        else
-        {
-            DrawnRampChanged?.Invoke(this, new DrawnRampChangedEventArgs { Channel = EditChannel, Ramp = _ramps[EditChannel] });
-        }
-    }
-
-    private void BezierMouseUp(MouseButtonEventArgs e)
-    {
-        if (_dragTarget == BezierDragTarget.None) return;
-        _dragTarget = BezierDragTarget.None;
-        _dragPointIndex = -1;
-        CurveCanvas.ReleaseMouseCapture();
-
-        if (_activeChannel < 0)
-        {
-            for (int ch = 0; ch < 3; ch++)
-                BezierPointsChanged?.Invoke(this, new BezierPointsChangedEventArgs
-                    { Channel = ch, Points = GetBezierPoints(ch) });
-        }
-        else
-        {
-            BezierPointsChanged?.Invoke(this, new BezierPointsChangedEventArgs
-                { Channel = EditChannel, Points = GetBezierPoints(EditChannel) });
-        }
-    }
-
-    private void EvaluateAndNotify()
-    {
-        if (_activeChannel < 0)
-        {
-            for (int ch = 0; ch < 3; ch++)
-            {
-                _ramps[ch] = BezierEvaluator.Evaluate(_bezierPointsPerChannel[ch]);
-                DrawnRampChanged?.Invoke(this, new DrawnRampChangedEventArgs { Channel = ch, Ramp = _ramps[ch] });
-                BezierPointsChanged?.Invoke(this, new BezierPointsChangedEventArgs
-                    { Channel = ch, Points = GetBezierPoints(ch) });
-            }
-        }
-        else
-        {
-            _ramps[EditChannel] = BezierEvaluator.Evaluate(ActiveBezierPoints);
-            DrawnRampChanged?.Invoke(this, new DrawnRampChangedEventArgs { Channel = EditChannel, Ramp = _ramps[EditChannel] });
-            BezierPointsChanged?.Invoke(this, new BezierPointsChangedEventArgs
-                { Channel = EditChannel, Points = GetBezierPoints(EditChannel) });
-        }
-        DrawCurve();
-    }
+    private double NormToPixelX(double nx, double w) => CurvePadding + nx * (w - 2 * CurvePadding);
+    private double NormToPixelY(double ny, double h) => (h - CurvePadding) - ny * (h - 2 * CurvePadding);
+    private double PixelToNormX(double px, double w) => (px - CurvePadding) / (w - 2 * CurvePadding);
+    private double PixelToNormY(double py, double h) => ((h - CurvePadding) - py) / (h - 2 * CurvePadding);
 
     private static double Distance(Point a, Point b)
     {

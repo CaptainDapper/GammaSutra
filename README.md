@@ -18,11 +18,13 @@ Gamma Sutra lets you dial in your display's output curve at the OS level using `
 
 - **Per-monitor control** — got two monitors that don't match? Now they do
 - **Parametric controls** — Gamma, Brightness, Contrast, S-Curve, Highlights, Shadows
-- **Freehand curve drawing** — click and drag to paint a custom gamma curve like a true maniac
-- **Skew sliders** — twist and remap your drawn curve from any corner without starting over
+- **Node mode** — click to place control points, drag to shape a smooth curve (monotone cubic spline — no overshoot)
+- **RGB channel isolation** — adjust All channels together, or tweak R, G, B independently
+- **Posterize** — quantize output levels with configurable steps, feather, and range
+- **Resizable window** — drag to resize, with graph zoom (scroll wheel) and pan (middle-click drag)
 - **Named profiles** — save your "dark room at 2am" and "midday gaming session" setups
 - **Global hotkeys** — switch profiles without alt-tabbing (Ctrl+Alt+anything you want)
-- **System tray** — lives quietly in your tray, out of your way
+- **System tray** — lives quietly in your tray, out of your way; shows per-monitor profile status
 - **Start with Windows** — set it and forget it
 
 ---
@@ -36,7 +38,7 @@ Gamma Sutra lets you dial in your display's output curve at the OS level using `
 
 Settings save to `%AppData%\GammaSutra\`. No registry garbage (well, only if you enable Start with Windows — that's just one key).
 
-> **⚠️ HDR Note:** Windows disables gamma ramps when HDR is on. Turn off HDR for this to work. Yes, that's Microsoft's fault, not mine.
+> **Warning: HDR Note:** Windows disables gamma ramps when HDR is on. Turn off HDR for this to work. Yes, that's Microsoft's fault, not mine.
 
 ---
 
@@ -53,14 +55,25 @@ Settings save to `%AppData%\GammaSutra\`. No registry garbage (well, only if you
 | Highlights | Quadratic adjustment to bright values only. Roll off the whites without touching shadows. |
 | Shadows | Same but for dark values. Lift your blacks like a cinematographer. |
 
-### Draw Mode
+### Node Mode
 
-Click **Draw Mode** to paint a completely freehand gamma curve. The sliders gray out and the canvas becomes your canvas.
+Click **Node** to switch to spline-based curve editing. The sliders collapse and the graph becomes interactive.
 
-- **Click and drag** to draw
-- **Left/Right sliders** — twist the curve from its dark or bright endpoint
-- **Top/Bottom sliders** — remap the input axis (compress highlights from the top, lift shadows from the bottom) — bakes in on release
-- **Revert** — undo your mess back to the last saved state
+- **Left-click** on empty space to add a node
+- **Left-click and drag** a node to reposition it
+- **Right-click** a node to delete it (endpoints can't be deleted)
+- Interpolation uses Fritsch-Carlson monotone cubic spline — guaranteed smooth, no overshoot between nodes
+- Works per-channel: select R, G, or B to edit that channel's curve independently
+
+### Posterize
+
+Expand the **Posterize** section to quantize output into discrete levels. Works in both Sliders and Node modes.
+
+| Control | What it does |
+|---------|-------------|
+| Steps | Number of output levels (0 = off, 2–32) |
+| Feather | Blend zone width at each step edge — smooths the staircase |
+| Range Min/Max | Limit posterization to a portion of the curve |
 
 ### Profiles
 
@@ -79,8 +92,16 @@ Requires .NET 9 SDK. That's it.
 
 To build a distributable single-file exe:
 ```
-dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish
+dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish-single
 ```
+
+---
+
+## Version History
+
+- **v1.0** — Initial release: parametric sliders, profiles, hotkeys, tray icon
+- **v1.1** — Unified mode switching, collapsible posterize, dynamic window height
+- **v1.2** — Node mode (monotone spline), RGB channel isolation, per-monitor profile display, resizable window with zoom/pan, built-in Default profile, removed Bezier mode
 
 ---
 
