@@ -57,11 +57,12 @@ Settings save to `%AppData%\GammaSutra\`. No registry garbage (well, only if you
 
 ### Node Mode
 
-Click **Node** to switch to spline-based curve editing. The sliders collapse and the graph becomes interactive.
+Click **Nodes** to switch to spline-based curve editing. The sliders collapse and the graph becomes interactive.
 
 - **Left-click** on empty space to add a node
 - **Left-click and drag** a node to reposition it
 - **Right-click** a node to delete it (endpoints can't be deleted)
+- **Escape** while dragging to cancel and snap the node back to where it started
 - Interpolation uses Fritsch-Carlson monotone cubic spline — guaranteed smooth, no overshoot between nodes
 - Works per-channel: select R, G, or B to edit that channel's curve independently
 
