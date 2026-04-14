@@ -76,34 +76,15 @@ public partial class GammaCurveControl : UserControl
 
     // ── Zoom/Pan ──────────────────────────────────────────────────────────────
 
-    private void ApplyCanvasTransform()
+    private void UpdateResetZoomVisibility()
     {
-        var tg = new TransformGroup();
-        tg.Children.Add(new ScaleTransform(_zoomLevel, _zoomLevel));
-        tg.Children.Add(new TranslateTransform(_panOffset.X, _panOffset.Y));
-        CurveCanvas.RenderTransform = tg;
-
         ResetZoomButton.Visibility = _zoomLevel > 1.01 ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    /// <summary>Transforms a mouse position (in control space) to canvas pixel space accounting for zoom/pan.</summary>
-    private Point MouseToCanvas(Point mousePos)
-    {
-        if (CurveCanvas.RenderTransform is TransformGroup tg)
-        {
-            var inverse = tg.Inverse;
-            if (inverse != null)
-                return inverse.Transform(mousePos);
-        }
-        return mousePos;
     }
 
     private void CurveCanvas_MouseWheel(object sender, MouseWheelEventArgs e)
     {
-        var mousePos = e.GetPosition(CurveCanvas);
-        // mousePos is already in canvas space (WPF transforms it)
-        // We need the position in parent space for zoom-toward-cursor
-        var parentPos = e.GetPosition(this);
+        // Mouse position in canvas pixel space (pre-zoom)
+        var pos = e.GetPosition(CurveCanvas);
 
         double oldZoom = _zoomLevel;
         if (e.Delta > 0)
@@ -112,16 +93,19 @@ public partial class GammaCurveControl : UserControl
             _zoomLevel = Math.Max(_zoomLevel / ZoomFactor, MinZoom);
 
         // Adjust pan so the point under cursor stays fixed
+        // pos in canvas space maps to a norm coordinate; we want that same norm
+        // coordinate to map back to the same pixel after zoom change.
         double ratio = _zoomLevel / oldZoom;
         _panOffset = new Point(
-            parentPos.X - ratio * (parentPos.X - _panOffset.X),
-            parentPos.Y - ratio * (parentPos.Y - _panOffset.Y));
+            pos.X - ratio * (pos.X - _panOffset.X),
+            pos.Y - ratio * (pos.Y - _panOffset.Y));
 
         // Clamp pan when at min zoom
         if (_zoomLevel <= MinZoom + 0.01)
             _panOffset = new Point(0, 0);
 
-        ApplyCanvasTransform();
+        UpdateResetZoomVisibility();
+        DrawCurve();
         e.Handled = true;
     }
 
@@ -134,7 +118,8 @@ public partial class GammaCurveControl : UserControl
     {
         _zoomLevel = 1.0;
         _panOffset = new Point(0, 0);
-        ApplyCanvasTransform();
+        UpdateResetZoomVisibility();
+        DrawCurve();
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -185,6 +170,37 @@ public partial class GammaCurveControl : UserControl
     public List<NodePoint> GetNodePoints()
         => GetNodePoints(EditChannel);
 
+    // ── Coordinate helpers (zoom/pan-aware) ──────────────────────────────────
+
+    private const double HitRadius = 10.0;
+    private const double CurvePadding = 30.0;
+
+    // Normalized (0-1) → screen pixel, with zoom and pan applied
+    private double NormToScreenX(double nx, double w)
+    {
+        double baseX = CurvePadding + nx * (w - 2 * CurvePadding);
+        return baseX * _zoomLevel + _panOffset.X;
+    }
+
+    private double NormToScreenY(double ny, double h)
+    {
+        double baseY = (h - CurvePadding) - ny * (h - 2 * CurvePadding);
+        return baseY * _zoomLevel + _panOffset.Y;
+    }
+
+    // Screen pixel → normalized (0-1), reversing zoom and pan
+    private double ScreenToNormX(double sx, double w)
+    {
+        double baseX = (sx - _panOffset.X) / _zoomLevel;
+        return (baseX - CurvePadding) / (w - 2 * CurvePadding);
+    }
+
+    private double ScreenToNormY(double sy, double h)
+    {
+        double baseY = (sy - _panOffset.Y) / _zoomLevel;
+        return ((h - CurvePadding) - baseY) / (h - 2 * CurvePadding);
+    }
+
     // ── Curve rendering ───────────────────────────────────────────────────────
 
     private static readonly SolidColorBrush[] ChannelBrushes =
@@ -212,32 +228,43 @@ public partial class GammaCurveControl : UserControl
         var gridBrush     = new SolidColorBrush(Color.FromRgb(40, 40, 40));
         var identityBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70));
 
-        double pad = CurvePadding;
-        double cLeft = pad, cTop = pad;
-        double cW = w - 2 * pad, cH = h - 2 * pad;
-
-        for (int i = 1; i <= 3; i++)
+        // Grid lines (quarter marks)
+        for (int i = 0; i <= 4; i++)
         {
-            double xg = cLeft + cW * i / 4.0, yg = cTop + cH * i / 4.0;
-            CurveCanvas.Children.Add(new Line { X1 = xg, Y1 = cTop, X2 = xg, Y2 = cTop + cH, Stroke = gridBrush, StrokeThickness = 1 });
-            CurveCanvas.Children.Add(new Line { X1 = cLeft, Y1 = yg, X2 = cLeft + cW, Y2 = yg, Stroke = gridBrush, StrokeThickness = 1 });
+            double nx = i / 4.0;
+            double ny = i / 4.0;
+            double sx = NormToScreenX(nx, w);
+            double sy = NormToScreenY(ny, h);
+
+            if (i > 0 && i < 4)
+            {
+                // Vertical grid line — full height of visible area
+                CurveCanvas.Children.Add(new Line { X1 = sx, Y1 = NormToScreenY(1, h), X2 = sx, Y2 = NormToScreenY(0, h), Stroke = gridBrush, StrokeThickness = 1 });
+                // Horizontal grid line — full width of visible area
+                CurveCanvas.Children.Add(new Line { X1 = NormToScreenX(0, w), Y1 = sy, X2 = NormToScreenX(1, w), Y2 = sy, Stroke = gridBrush, StrokeThickness = 1 });
+            }
         }
 
+        // Border rectangle
         {
+            double x0 = NormToScreenX(0, w), y0 = NormToScreenY(1, h);
+            double x1 = NormToScreenX(1, w), y1 = NormToScreenY(0, h);
             var borderBrush = new SolidColorBrush(Color.FromRgb(55, 55, 55));
             CurveCanvas.Children.Add(new System.Windows.Shapes.Rectangle
             {
-                Width = cW, Height = cH,
+                Width = x1 - x0, Height = y1 - y0,
                 Stroke = borderBrush, StrokeThickness = 1,
                 Fill = System.Windows.Media.Brushes.Transparent
             });
-            Canvas.SetLeft(CurveCanvas.Children[^1], cLeft);
-            Canvas.SetTop(CurveCanvas.Children[^1], cTop);
+            Canvas.SetLeft(CurveCanvas.Children[^1], x0);
+            Canvas.SetTop(CurveCanvas.Children[^1], y0);
         }
 
+        // Identity line (diagonal)
         CurveCanvas.Children.Add(new Line
         {
-            X1 = cLeft, Y1 = cTop + cH, X2 = cLeft + cW, Y2 = cTop,
+            X1 = NormToScreenX(0, w), Y1 = NormToScreenY(0, h),
+            X2 = NormToScreenX(1, w), Y2 = NormToScreenY(1, h),
             Stroke = identityBrush, StrokeThickness = 1,
             StrokeDashArray = new DoubleCollection { 4, 4 }
         });
@@ -251,7 +278,7 @@ public partial class GammaCurveControl : UserControl
             if (_isNodeMode) curveBrush = new SolidColorBrush(Color.FromRgb(255, 165, 0));
             else curveBrush = new SolidColorBrush(Colors.Cyan);
 
-            DrawChannelPolyline(cLeft, cTop, cW, cH, _ramps[0], curveBrush, 1.5);
+            DrawChannelPolyline(w, h, _ramps[0], curveBrush, 1.5);
         }
         else
         {
@@ -272,7 +299,7 @@ public partial class GammaCurveControl : UserControl
                 bool isActive = _activeChannel < 0 || ch == _activeChannel;
                 var brush = isActive ? ChannelBrushes[ch] : ChannelBrushesDim[ch];
                 double thickness = isActive ? 1.5 : 1.0;
-                DrawChannelPolyline(cLeft, cTop, cW, cH, _ramps[ch], brush, thickness);
+                DrawChannelPolyline(w, h, _ramps[ch], brush, thickness);
             }
         }
 
@@ -280,15 +307,15 @@ public partial class GammaCurveControl : UserControl
             DrawNodeOverlay(w, h);
     }
 
-    private void DrawChannelPolyline(double cLeft, double cTop, double cW, double cH,
+    private void DrawChannelPolyline(double w, double h,
                                       ushort[] ramp, SolidColorBrush brush, double thickness)
     {
         var polyline = new Polyline { Stroke = brush, StrokeThickness = thickness, Points = new PointCollection() };
         for (int i = 0; i < 256; i++)
         {
-            double x = cLeft + cW * i / 255.0;
-            double y = cTop + cH * (1.0 - ramp[i] / 65280.0);
-            polyline.Points.Add(new Point(x, y));
+            double nx = i / 255.0;
+            double ny = ramp[i] / 65280.0;
+            polyline.Points.Add(new Point(NormToScreenX(nx, w), NormToScreenY(ny, h)));
         }
         CurveCanvas.Children.Add(polyline);
     }
@@ -313,8 +340,8 @@ public partial class GammaCurveControl : UserControl
         var pts = _nodePointsPerChannel[editCh];
         foreach (var pt in pts)
         {
-            double px = NormToPixelX(pt.X, w);
-            double py = NormToPixelY(pt.Y, h);
+            double px = NormToScreenX(pt.X, w);
+            double py = NormToScreenY(pt.Y, h);
 
             var circle = new Ellipse { Width = 10, Height = 10, Fill = anchorBrush };
             Canvas.SetLeft(circle, px - 5);
@@ -341,8 +368,8 @@ public partial class GammaCurveControl : UserControl
             // Right-click: delete node (not first/last)
             for (int i = 1; i < pts.Count - 1; i++)
             {
-                double px = NormToPixelX(pts[i].X, w);
-                double py = NormToPixelY(pts[i].Y, h);
+                double px = NormToScreenX(pts[i].X, w);
+                double py = NormToScreenY(pts[i].Y, h);
                 if (Distance(pos, new Point(px, py)) < NodeHitRadius)
                 {
                     pts.RemoveAt(i);
@@ -364,8 +391,8 @@ public partial class GammaCurveControl : UserControl
         // Left-click: hit test existing nodes
         for (int i = 0; i < pts.Count; i++)
         {
-            double px = NormToPixelX(pts[i].X, w);
-            double py = NormToPixelY(pts[i].Y, h);
+            double px = NormToScreenX(pts[i].X, w);
+            double py = NormToScreenY(pts[i].Y, h);
             if (Distance(pos, new Point(px, py)) < NodeHitRadius)
             {
                 _dragNodeIndex = i;
@@ -376,8 +403,8 @@ public partial class GammaCurveControl : UserControl
         }
 
         // Left-click empty: add new node
-        double newX = Math.Clamp(PixelToNormX(pos.X, w), 0.0, 1.0);
-        double newY = Math.Clamp(PixelToNormY(pos.Y, h), 0.0, 1.0);
+        double newX = Math.Clamp(ScreenToNormX(pos.X, w), 0.0, 1.0);
+        double newY = Math.Clamp(ScreenToNormY(pos.Y, h), 0.0, 1.0);
 
         int insertIdx = 0;
         for (int i = 0; i < pts.Count; i++)
@@ -394,6 +421,7 @@ public partial class GammaCurveControl : UserControl
         }
 
         _dragNodeIndex = insertIdx;
+        SnapshotDragOrigin();
         CurveCanvas.CaptureMouse();
         NodeEvaluateAndNotify();
     }
@@ -410,8 +438,8 @@ public partial class GammaCurveControl : UserControl
         var pts = _nodePointsPerChannel[EditChannel];
         var pt = pts[_dragNodeIndex];
 
-        double mx = Math.Clamp(PixelToNormX(pos.X, w), 0.0, 1.0);
-        double my = Math.Clamp(PixelToNormY(pos.Y, h), 0.0, 1.0);
+        double mx = Math.Clamp(ScreenToNormX(pos.X, w), 0.0, 1.0);
+        double my = Math.Clamp(ScreenToNormY(pos.Y, h), 0.0, 1.0);
 
         bool isFirst = _dragNodeIndex == 0;
         bool isLast = _dragNodeIndex == pts.Count - 1;
@@ -555,7 +583,7 @@ public partial class GammaCurveControl : UserControl
         if (e.ChangedButton == MouseButton.Middle)
         {
             _isPanning = true;
-            _panStart = e.GetPosition(this);
+            _panStart = e.GetPosition(CurveCanvas);
             _panOffsetStart = _panOffset;
             CurveCanvas.CaptureMouse();
             e.Handled = true;
@@ -568,11 +596,11 @@ public partial class GammaCurveControl : UserControl
     {
         if (_isPanning)
         {
-            var pos = e.GetPosition(this);
+            var pos = e.GetPosition(CurveCanvas);
             _panOffset = new Point(
                 _panOffsetStart.X + (pos.X - _panStart.X),
                 _panOffsetStart.Y + (pos.Y - _panStart.Y));
-            ApplyCanvasTransform();
+            DrawCurve();
             e.Handled = true;
             return;
         }
@@ -590,16 +618,6 @@ public partial class GammaCurveControl : UserControl
         }
         if (_isNodeMode) { NodeMouseUp(e); return; }
     }
-
-    // ── Coordinate helpers ───────────────────────────────────────────────────
-
-    private const double HitRadius = 10.0;
-    private const double CurvePadding = 30.0;
-
-    private double NormToPixelX(double nx, double w) => CurvePadding + nx * (w - 2 * CurvePadding);
-    private double NormToPixelY(double ny, double h) => (h - CurvePadding) - ny * (h - 2 * CurvePadding);
-    private double PixelToNormX(double px, double w) => (px - CurvePadding) / (w - 2 * CurvePadding);
-    private double PixelToNormY(double py, double h) => ((h - CurvePadding) - py) / (h - 2 * CurvePadding);
 
     private static double Distance(Point a, Point b)
     {

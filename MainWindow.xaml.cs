@@ -97,6 +97,7 @@ public partial class MainWindow : Window
     private void MonitorComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_suppressEvents) return;
+        RestoreCurveMode();
         LoadUIFromCurrentSettings();
         UpdateCurrentProfileLabel();
         ClearDirty();
@@ -466,6 +467,7 @@ public partial class MainWindow : Window
         ProfileService.AddOrUpdate(profile);
         ProfileService.LastUsedProfileName = CurrentProfileName;
         ProfileService.Save();
+        ReRegisterHotkeys();
 
         _loadedSettings[SelectedDevice] = CurrentSettings.Clone();
 
