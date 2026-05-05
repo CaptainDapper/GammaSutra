@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -550,6 +551,16 @@ public partial class MainWindow : Window
             Dispatcher.Invoke(() => ApplyProfile(profile));
     }
 
+    private string? GetDeviceAtCursor()
+    {
+        if (!NativeMethods.GetCursorPos(out var pt)) return null;
+        var hMonitor = NativeMethods.MonitorFromPoint(pt, NativeMethods.MONITOR_DEFAULTTONEAREST);
+        if (hMonitor == IntPtr.Zero) return null;
+        var info = new NativeMethods.MONITORINFOEX { cbSize = Marshal.SizeOf<NativeMethods.MONITORINFOEX>() };
+        if (!NativeMethods.GetMonitorInfo(hMonitor, ref info)) return null;
+        return _monitorDeviceNames.FirstOrDefault(d => string.Equals(d, info.szDevice, StringComparison.OrdinalIgnoreCase));
+    }
+
     internal void ReRegisterHotkeys()
     {
         _hotkeyManager?.UnregisterAll();
@@ -558,7 +569,16 @@ public partial class MainWindow : Window
             if (p.HotkeyVKey == 0) continue;
             var captured = p;
             _hotkeyManager?.Register(captured.HotkeyModifiers, captured.HotkeyVKey, () =>
-                Dispatcher.Invoke(() => ApplyProfile(captured)));
+                Dispatcher.Invoke(() =>
+                {
+                    var cursorDevice = GetDeviceAtCursor();
+                    if (cursorDevice != null)
+                    {
+                        int idx = _monitorDeviceNames.IndexOf(cursorDevice);
+                        if (idx >= 0) MonitorComboBox.SelectedIndex = idx;
+                    }
+                    ApplyProfile(captured);
+                }));
         }
     }
 
